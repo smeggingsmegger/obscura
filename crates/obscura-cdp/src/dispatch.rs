@@ -700,6 +700,7 @@ fn is_v8_free_method(method: &str) -> bool {
             | "Network.setCookies"
             | "Network.deleteCookies"
             | "Network.clearBrowserCookies"
+            | "Network.clearBrowserCache"
             | "Network.getResponseBody"
             | "Fetch.continueRequest"
             | "Fetch.fulfillRequest"
