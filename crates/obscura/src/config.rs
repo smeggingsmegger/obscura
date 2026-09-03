@@ -8,7 +8,7 @@ pub struct BrowserConfig {
     pub stealth: bool,
     /// Custom User-Agent string
     pub user_agent: Option<String>,
-    /// Directory for persistent cookie storage
+    /// Legacy directory for persistent cookie storage only
     pub storage_dir: Option<PathBuf>,
 }
 

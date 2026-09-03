@@ -1,7 +1,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use deno_core::Extension;
@@ -92,8 +95,9 @@ pub struct JsNetworkEvent {
 }
 
 const LOCAL_STORAGE_ORIGIN_LIMIT: usize = 5 * 1024 * 1024;
-const LOCAL_STORAGE_TOTAL_LIMIT: usize = 32 * 1024 * 1024;
+const LOCAL_STORAGE_TOTAL_LIMIT: usize = 25 * 1024 * 1024;
 const LOCAL_STORAGE_ORIGIN_COUNT_LIMIT: usize = 256;
+static NEXT_OPAQUE_STORAGE_ORIGIN: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Default)]
 struct OriginStorageInner {
@@ -106,6 +110,27 @@ struct OriginStorageInner {
 #[derive(Default)]
 pub struct OriginStorage {
     inner: std::sync::Mutex<OriginStorageInner>,
+}
+
+/// Validation failure while replacing an origin-scoped storage snapshot.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OriginStorageError {
+    /// The snapshot contains more origins than the engine accepts.
+    #[error("storage snapshot contains {actual} origins; maximum is {limit}")]
+    TooManyOrigins { actual: usize, limit: usize },
+    /// One origin exceeds the per-origin byte quota.
+    #[error("storage origin {origin} uses {actual} bytes; maximum is {limit}")]
+    OriginQuota {
+        origin: String,
+        actual: usize,
+        limit: usize,
+    },
+    /// The complete snapshot exceeds the context byte quota.
+    #[error("storage snapshot uses {actual} bytes; maximum is {limit}")]
+    TotalQuota { actual: usize, limit: usize },
+    /// One origin contains the same key more than once.
+    #[error("storage origin {origin} contains duplicate key {key:?}")]
+    DuplicateKey { origin: String, key: String },
 }
 
 impl OriginStorage {
@@ -203,6 +228,73 @@ impl OriginStorage {
                 .sum::<usize>();
         }
     }
+
+    /// Return an immutable copy of every origin bucket.
+    ///
+    /// This is intended for an embedding broker. It is not registered as a
+    /// JavaScript op or CDP method.
+    pub fn snapshot_all(&self) -> HashMap<String, Vec<(String, String)>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .origins
+            .clone()
+    }
+
+    /// Atomically replace every origin bucket after enforcing storage quotas.
+    ///
+    /// Validation completes before the live store is changed, so a rejected
+    /// profile import cannot leave a partially restored context.
+    pub fn replace_all(
+        &self,
+        origins: HashMap<String, Vec<(String, String)>>,
+    ) -> Result<(), OriginStorageError> {
+        if origins.len() > LOCAL_STORAGE_ORIGIN_COUNT_LIMIT {
+            return Err(OriginStorageError::TooManyOrigins {
+                actual: origins.len(),
+                limit: LOCAL_STORAGE_ORIGIN_COUNT_LIMIT,
+            });
+        }
+
+        let mut total_bytes = 0usize;
+        for (origin, items) in &origins {
+            let mut names = HashSet::new();
+            let mut origin_bytes = 0usize;
+            for (key, value) in items {
+                if !names.insert(key) {
+                    return Err(OriginStorageError::DuplicateKey {
+                        origin: origin.clone(),
+                        key: key.clone(),
+                    });
+                }
+                origin_bytes = origin_bytes
+                    .saturating_add(key.len())
+                    .saturating_add(value.len());
+            }
+            if origin_bytes > LOCAL_STORAGE_ORIGIN_LIMIT {
+                return Err(OriginStorageError::OriginQuota {
+                    origin: origin.clone(),
+                    actual: origin_bytes,
+                    limit: LOCAL_STORAGE_ORIGIN_LIMIT,
+                });
+            }
+            total_bytes = total_bytes.saturating_add(origin_bytes);
+        }
+        if total_bytes > LOCAL_STORAGE_TOTAL_LIMIT {
+            return Err(OriginStorageError::TotalQuota {
+                actual: total_bytes,
+                limit: LOCAL_STORAGE_TOTAL_LIMIT,
+            });
+        }
+
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.origins = origins;
+        inner.bytes = total_bytes;
+        Ok(())
+    }
 }
 
 #[cfg(feature = "render")]
@@ -222,6 +314,10 @@ pub(crate) struct CanvasBackingSurface {
 pub struct ObscuraState {
     pub dom: Option<DomTree>,
     pub url: String,
+    /// Per-realm key used only when the document URL has an opaque origin.
+    /// This prevents unrelated `data:`, `file:`, or invalid URLs from sharing
+    /// the legacy global `"null"` storage bucket.
+    pub opaque_storage_origin: String,
     /// WHATWG canonical name of the document's character encoding (e.g.
     /// "UTF-8", "EUC-JP"). Backs `document.characterSet` and the URL query
     /// encoding override for `<a>`/`<area>` hrefs in legacy-charset documents.
@@ -465,6 +561,10 @@ impl ObscuraState {
         ObscuraState {
             dom: None,
             url: "about:blank".to_string(),
+            opaque_storage_origin: format!(
+                "opaque:{}",
+                NEXT_OPAQUE_STORAGE_ORIGIN.fetch_add(1, Ordering::Relaxed)
+            ),
             encoding: "UTF-8".to_string(),
             title: String::new(),
             referrer: String::new(),
@@ -4007,7 +4107,8 @@ mod tests {
         FetchCredentials, ObscuraState, cors_response_allows, cors_unsafe_request_header_names,
         glob_match, is_cors_safelisted_content_type, is_cors_safelisted_request_header,
         parse_cors_header_list, preflight_allows_header, preflight_allows_method,
-        sanitize_redirect_headers, validate_fetch_url,
+        sanitize_redirect_headers, storage_origin, validate_fetch_url, OriginStorage,
+        OriginStorageError,
     };
     use crate::runtime::ObscuraJsRuntime;
     use obscura_dom::parse_html;
@@ -4406,6 +4507,35 @@ mod tests {
     fn random_bytes_within_limits() {
         let buf = random_bytes(32).expect("an ordinary draw must succeed");
         assert_eq!(buf.len(), 32, "draw must return the requested length");
+    }
+
+    #[test]
+    fn opaque_documents_receive_unique_storage_origins() {
+        let first = ObscuraState::new();
+        let second = ObscuraState::new();
+        assert_ne!(storage_origin(&first), storage_origin(&second));
+        assert!(storage_origin(&first).starts_with("opaque:"));
+    }
+
+    #[test]
+    fn origin_storage_replacement_is_atomic_on_quota_failure() {
+        let storage = OriginStorage::default();
+        storage
+            .replace_all(std::collections::HashMap::from([(
+                "https://example.com".to_string(),
+                vec![("key".to_string(), "before".to_string())],
+            )]))
+            .unwrap();
+        let before = storage.snapshot_all();
+        let result = storage.replace_all(std::collections::HashMap::from([(
+            "https://example.com".to_string(),
+            vec![("key".to_string(), "x".repeat(5 * 1024 * 1024 + 1))],
+        )]));
+        assert!(matches!(
+            result,
+            Err(OriginStorageError::OriginQuota { .. })
+        ));
+        assert_eq!(storage.snapshot_all(), before);
     }
 
     // SEC-005 / #581 — op_fetch_url must not buffer an unbounded response body.
@@ -5169,10 +5299,11 @@ fn op_set_cookie(scope: &mut v8::PinScope, state: &OpState, #[string] cookie_str
     jar.set_cookie_from_js(cookie_str, &url);
 }
 
-fn storage_origin(raw_url: &str) -> String {
-    url::Url::parse(raw_url)
-        .map(|url| url.origin().ascii_serialization())
-        .unwrap_or_else(|_| "null".to_string())
+fn storage_origin(state: &ObscuraState) -> String {
+    match url::Url::parse(&state.url) {
+        Ok(url) if url.origin().is_tuple() => url.origin().ascii_serialization(),
+        _ => state.opaque_storage_origin.clone(),
+    }
 }
 
 fn origin_storage_command(
@@ -5187,11 +5318,15 @@ fn origin_storage_command(
     };
 
     match command {
-        "snapshot" => serde_json::to_string(&storage.snapshot(origin))
-            .unwrap_or_else(|_| "[]".to_string()),
-        "get" => serde_json::to_string(&storage.get(origin, key))
-            .unwrap_or_else(|_| "null".to_string()),
-        "set" => storage.set(origin, key.to_string(), value.to_string()).to_string(),
+        "snapshot" => {
+            serde_json::to_string(&storage.snapshot(origin)).unwrap_or_else(|_| "[]".to_string())
+        }
+        "get" => {
+            serde_json::to_string(&storage.get(origin, key)).unwrap_or_else(|_| "null".to_string())
+        }
+        "set" => storage
+            .set(origin, key.to_string(), value.to_string())
+            .to_string(),
         "remove" => {
             storage.remove(origin, key);
             "true".to_string()
@@ -5218,13 +5353,7 @@ fn op_local_storage(
     // to the shared page Arcs, so sharing there is unchanged.
     let gs = realm_state(scope, state);
     let gs = gs.borrow();
-    origin_storage_command(
-        &gs.local_storage,
-        &storage_origin(&gs.url),
-        command,
-        key,
-        value,
-    )
+    origin_storage_command(&gs.local_storage, &storage_origin(&gs), command, key, value)
 }
 
 #[op2]
@@ -5240,7 +5369,7 @@ fn op_session_storage(
     let gs = gs.borrow();
     origin_storage_command(
         &gs.session_storage,
-        &storage_origin(&gs.url),
+        &storage_origin(&gs),
         command,
         key,
         value,

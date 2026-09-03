@@ -40,6 +40,7 @@ struct Args {
     #[arg(long)]
     user_agent: Option<String>,
 
+    /// Legacy directory for cookie persistence. It does not persist localStorage.
     #[arg(long)]
     storage_dir: Option<std::path::PathBuf>,
 
@@ -60,6 +61,9 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print machine-readable runtime capability declarations.
+    Capabilities,
+
     Serve {
         #[arg(short, long, default_value_t = 9222)]
         port: u16,
@@ -94,6 +98,7 @@ enum Command {
         #[arg(long)]
         allow_file_access: bool,
 
+        /// Legacy directory for cookie persistence. It does not persist localStorage.
         #[arg(long)]
         storage_dir: Option<std::path::PathBuf>,
 
@@ -402,6 +407,12 @@ async fn run_cli() -> anyhow::Result<()> {
     let obey_robots = args.obey_robots;
 
     match args.command {
+        Some(Command::Capabilities) => {
+            println!(
+                "{}",
+                serde_json::to_string(&obscura_browser::RuntimeCapabilities::current())?
+            );
+        }
         Some(Command::Serve {
             port,
             host,
@@ -493,7 +504,9 @@ async fn run_cli() -> anyhow::Result<()> {
                     anyhow::bail!("Pass URLs via a positional argument or --file, not both.");
                 }
                 if screenshot.is_some() {
-                    anyhow::bail!("--screenshot is only supported for a single URL, not --file batch mode.");
+                    anyhow::bail!(
+                        "--screenshot is only supported for a single URL, not --file batch mode."
+                    );
                 }
                 // Batch mode is raw HTTP only. Rendering each URL through the
                 // browser/JS stack is what `scrape` is for.
@@ -512,7 +525,7 @@ async fn run_cli() -> anyhow::Result<()> {
                     global_proxy,
                     output,
                     quiet,
-                    stealth
+                    stealth,
                 )
                 .await?;
             } else {
@@ -835,14 +848,8 @@ async fn run_fetch(
     // payloads (images, fonts, …) and any non-HTML resource where parsing the
     // body through the DOM/JS layer would corrupt or discard data.
     if dump == DumpFormat::Original {
-        let bytes = fetch_original_bytes(
-            url_str,
-            proxy,
-            user_agent.clone(),
-            timeout_secs,
-            stealth,
-        )
-        .await?;
+        let bytes =
+            fetch_original_bytes(url_str, proxy, user_agent.clone(), timeout_secs, stealth).await?;
         write_or_print_bytes(&bytes, output.as_ref()).await?;
         return Ok(());
     }
@@ -2239,7 +2246,10 @@ mod tests {
 
         let _ = tokio::fs::remove_file(&path).await;
 
-        assert_eq!(bytes, PNG_BYTES, "stealth=true must not change file:// handling");
+        assert_eq!(
+            bytes, PNG_BYTES,
+            "stealth=true must not change file:// handling"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2492,14 +2502,9 @@ mod tests {
 
     #[test]
     fn fetch_screenshot_has_a_short_alias_and_rejects_batch_mode() {
-        let args = Args::try_parse_from([
-            "obscura",
-            "fetch",
-            "https://example.com",
-            "-s",
-            "page.png",
-        ])
-        .unwrap();
+        let args =
+            Args::try_parse_from(["obscura", "fetch", "https://example.com", "-s", "page.png"])
+                .unwrap();
         match args.command {
             Some(Command::Fetch { screenshot, .. }) => {
                 assert_eq!(screenshot, Some(std::path::PathBuf::from("page.png")));
@@ -2523,16 +2528,15 @@ mod tests {
             Some(Command::Fetch { timeout, .. }) => timeout,
             _ => panic!("expected Fetch command"),
         };
-        let context = std::sync::Arc::new(
-            obscura_browser::BrowserContext::with_storage_and_network(
+        let context =
+            std::sync::Arc::new(obscura_browser::BrowserContext::with_storage_and_network(
                 "cli-timeout-test".to_string(),
                 None,
                 false,
                 None,
                 None,
                 true,
-            ),
-        );
+            ));
         let mut page = obscura_browser::Page::new("cli-timeout-test".to_string(), context);
         configure_fetch_navigation_timeout(&mut page, timeout);
         page.navigation_timeout()
@@ -2540,14 +2544,9 @@ mod tests {
 
     #[test]
     fn fetch_timeout_sets_the_page_navigation_budget() {
-        let args = Args::try_parse_from([
-            "obscura",
-            "fetch",
-            "https://example.com",
-            "--timeout",
-            "50",
-        ])
-        .unwrap();
+        let args =
+            Args::try_parse_from(["obscura", "fetch", "https://example.com", "--timeout", "50"])
+                .unwrap();
         assert_eq!(
             configured_fetch_timeout(args),
             std::time::Duration::from_secs(50)

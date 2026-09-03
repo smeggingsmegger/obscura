@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod context;
 mod fork_virtual_url;
 pub mod lifecycle;
@@ -6,7 +7,11 @@ pub mod page;
 pub mod pdf;
 pub mod profiles;
 
-pub use context::BrowserContext;
+pub use capabilities::RuntimeCapabilities;
+pub use context::{
+    BrowserContext, PortableOriginState, PortableProfileState, PortableStorageEntry,
+    ProfileStateError, PORTABLE_PROFILE_STATE_VERSION,
+};
 pub use lifecycle::{LifecycleState, WaitUntil};
 pub use obscura_js::HTML_TO_MARKDOWN_JS;
 #[cfg(feature = "render")]

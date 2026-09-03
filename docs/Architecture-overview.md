@@ -137,7 +137,10 @@ init → commit → domcontentloaded → load → networkidle2 → networkidle0
 
 ## Storage
 
-`--storage-dir` persists cookies (`cookies.json`) and localStorage (`localStorage/<origin>.json`). Reads on process start, writes on every navigation and on graceful shutdown.
+`--storage-dir` persists the legacy `cookies.json` file only. Trusted Rust
+embedders can import/export the bounded portable profile schema directly from a
+pristine `BrowserContext`; it contains cookies and granted-origin localStorage,
+never sessionStorage, cache, history, or page artifacts.
 
 ## Stealth
 

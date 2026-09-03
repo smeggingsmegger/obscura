@@ -9,7 +9,7 @@ Top-level flags apply to every subcommand.
     --stealth                Consistent browser fingerprint + tracker blocking
     --obey-robots            Respect robots.txt
     --user-agent <UA>        Override the User-Agent
-    --storage-dir <DIR>      Persistent cookies and localStorage
+    --storage-dir <DIR>      Legacy persistent cookie directory
     --allow-private-network  Permit loopback / RFC1918 / link-local
     --v8-flags <FLAGS>       Raw V8 flags, applied at startup
 -h, --help                   Help
@@ -72,7 +72,7 @@ Run the CDP server. Puppeteer and Playwright connect over WebSocket.
     --workers <N>            Worker processes (default 1)
     --font-dir <DIR>         Recursively load fonts once per worker (repeatable; render build)
     --allow-file-access      Permit CDP clients to navigate to file:// URLs
-    --storage-dir <DIR>      Persistent cookies and localStorage
+    --storage-dir <DIR>      Legacy persistent cookie directory
     --allow-private-network  Permit loopback / RFC1918 / link-local
 -q, --quiet                  Suppress info logging
 -v, --verbose                Enable info logging

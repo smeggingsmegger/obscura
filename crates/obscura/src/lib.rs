@@ -25,8 +25,12 @@ pub use browser::Browser;
 pub use config::BrowserConfig;
 pub use cookie::{Cookie, CookieStore};
 pub use error::Error;
+pub use obscura_browser::{
+    PortableOriginState, PortableProfileState, PortableStorageEntry, ProfileStateError,
+    RuntimeCapabilities, PORTABLE_PROFILE_STATE_VERSION,
+};
 pub use page::Page;
 
 // Request/response interception types (issue #306).
-pub use obscura_browser::{InterceptedRequest, InterceptResolution};
+pub use obscura_browser::{InterceptResolution, InterceptedRequest};
 pub use obscura_net::{RequestCallback, RequestInfo, ResourceType, Response, ResponseCallback};

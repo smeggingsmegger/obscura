@@ -1,6 +1,6 @@
 use std::cell::RefCell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use obscura_browser::BrowserContext;
 use obscura_net::CookieJar;
@@ -9,6 +9,7 @@ use crate::config::BrowserConfig;
 use crate::cookie::CookieStore;
 use crate::error::Error;
 use crate::page::Page;
+use obscura_browser::{PortableProfileState, ProfileStateError};
 
 static NEXT_PAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -43,7 +44,10 @@ impl Browser {
         let context = Arc::new(context);
         let cookie_jar = context.cookie_jar.clone();
 
-        Ok(Browser { context, cookie_jar })
+        Ok(Browser {
+            context,
+            cookie_jar,
+        })
     }
 
     pub fn builder() -> BrowserBuilder {
@@ -52,10 +56,7 @@ impl Browser {
 
     pub async fn new_page(&self) -> Result<Page, Error> {
         let id = NEXT_PAGE_ID.fetch_add(1, Ordering::Relaxed);
-        let page = obscura_browser::Page::new(
-            format!("page-{}", id),
-            self.context.clone(),
-        );
+        let page = obscura_browser::Page::new(format!("page-{}", id), self.context.clone());
         Ok(Page {
             inner: RefCell::new(page),
         })
@@ -64,6 +65,23 @@ impl Browser {
     /// Access the cookie store for this browser session.
     pub fn cookies(&self) -> CookieStore {
         CookieStore::new(self.cookie_jar.clone())
+    }
+
+    /// Export broker-approved cookies and localStorage without page execution.
+    pub fn export_portable_state(
+        &self,
+        granted_origins: &[String],
+    ) -> Result<PortableProfileState, ProfileStateError> {
+        self.context.export_portable_state(granted_origins)
+    }
+
+    /// Restore broker-approved cookies and localStorage before navigation.
+    pub fn import_portable_state(
+        &self,
+        state: PortableProfileState,
+        granted_origins: &[String],
+    ) -> Result<(), ProfileStateError> {
+        self.context.import_portable_state(state, granted_origins)
     }
 }
 

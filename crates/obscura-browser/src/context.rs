@@ -1,8 +1,76 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use obscura_js::ops::OriginStorage;
-use obscura_net::{CookieJar, ObscuraHttpClient, RobotsCache};
+use obscura_js::ops::{OriginStorage, OriginStorageError};
+use obscura_net::{CookieJar, ObscuraHttpClient, PortableCookie, PortableCookieError, RobotsCache};
+use serde::{Deserialize, Serialize};
+
+/// Current broker profile-state schema.
+pub const PORTABLE_PROFILE_STATE_VERSION: u16 = 1;
+
+/// Maximum serialized state accepted by the engine for one profile.
+pub const PORTABLE_PROFILE_STATE_MAX_BYTES: usize = 25 * 1024 * 1024;
+
+/// Broker-owned browser state. It deliberately excludes sessionStorage,
+/// IndexedDB, CacheStorage, service workers, cache, history, and artifacts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableProfileState {
+    pub version: u16,
+    #[serde(default)]
+    pub cookies: Vec<PortableCookie>,
+    #[serde(default)]
+    pub origins: Vec<PortableOriginState>,
+}
+
+impl Default for PortableProfileState {
+    fn default() -> Self {
+        Self {
+            version: PORTABLE_PROFILE_STATE_VERSION,
+            cookies: Vec::new(),
+            origins: Vec::new(),
+        }
+    }
+}
+
+/// One exact HTTPS origin's durable localStorage entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableOriginState {
+    pub origin: String,
+    #[serde(default, rename = "localStorage")]
+    pub local_storage: Vec<PortableStorageEntry>,
+}
+
+/// One localStorage name/value pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableStorageEntry {
+    pub name: String,
+    pub value: String,
+}
+
+/// Validation failure for direct broker profile-state operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ProfileStateError {
+    #[error("unsupported portable profile-state version {0}")]
+    UnsupportedVersion(u16),
+    #[error("profile origin {0:?} is not a canonical HTTPS origin")]
+    InvalidOrigin(String),
+    #[error("profile origin {0:?} is not in the broker grant set")]
+    OriginNotGranted(String),
+    #[error("profile cookie domain {0:?} is not covered by the broker grant set")]
+    CookieDomainNotGranted(String),
+    #[error("portable profile state is {actual} bytes; maximum is {limit}")]
+    TooLarge { actual: usize, limit: usize },
+    #[error(transparent)]
+    Storage(#[from] OriginStorageError),
+    #[error(transparent)]
+    Cookie(#[from] PortableCookieError),
+    #[error("portable profile state could not be encoded: {0}")]
+    Encode(#[from] serde_json::Error),
+}
 
 pub struct BrowserContext {
     pub id: String,
@@ -39,13 +107,11 @@ impl BrowserContext {
         Self::_new_inner(id, None, false, None, None, false)
     }
 
-    /// Create a BrowserContext with an optional storage directory.
+    /// Create a BrowserContext with an optional legacy cookie directory.
     /// When `storage_dir` is set, cookies are automatically loaded from
-    /// `{storage_dir}/cookies.json` on creation.
-    pub fn with_storage(
-        id: String,
-        storage_dir: Option<PathBuf>,
-    ) -> Self {
+    /// `{storage_dir}/cookies.json` on creation. Local and session storage are
+    /// never loaded from this directory.
+    pub fn with_storage(id: String, storage_dir: Option<PathBuf>) -> Self {
         Self::_new_inner(id, None, false, None, storage_dir, false)
     }
 
@@ -71,7 +137,14 @@ impl BrowserContext {
         storage_dir: Option<PathBuf>,
         allow_private_network: bool,
     ) -> Self {
-        Self::_new_inner(id, proxy_url, stealth, user_agent, storage_dir, allow_private_network)
+        Self::_new_inner(
+            id,
+            proxy_url,
+            stealth,
+            user_agent,
+            storage_dir,
+            allow_private_network,
+        )
     }
 
     fn _new_inner(
@@ -94,7 +167,11 @@ impl BrowserContext {
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::warn!("Failed to load cookies from {}: {}", cookie_path.display(), e);
+                        tracing::warn!(
+                            "Failed to load cookies from {}: {}",
+                            cookie_path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -210,6 +287,167 @@ impl BrowserContext {
             }
         }
     }
+
+    /// Export cookies and granted-origin localStorage for a trusted broker.
+    ///
+    /// The operation reads native context state directly and never navigates a
+    /// page or executes page JavaScript. Callers must supply the exact HTTPS
+    /// origins currently approved for the profile.
+    pub fn export_portable_state(
+        &self,
+        granted_origins: &[String],
+    ) -> Result<PortableProfileState, ProfileStateError> {
+        let grants = canonical_grants(granted_origins)?;
+        let snapshot = self.local_storage.snapshot_all();
+        let mut origins = Vec::new();
+        for (raw_origin, entries) in snapshot {
+            let Ok(origin) = canonical_https_origin(&raw_origin) else {
+                // Opaque origins are intentionally never durable.
+                continue;
+            };
+            if !grants.contains(&origin) {
+                continue;
+            }
+            let mut local_storage = entries
+                .into_iter()
+                .map(|(name, value)| PortableStorageEntry { name, value })
+                .collect::<Vec<_>>();
+            local_storage.sort_by(|left, right| left.name.cmp(&right.name));
+            origins.push(PortableOriginState {
+                origin,
+                local_storage,
+            });
+        }
+        origins.sort_by(|left, right| left.origin.cmp(&right.origin));
+
+        let cookies = self
+            .cookie_jar
+            .export_portable_cookies()
+            .into_iter()
+            .filter(|cookie| cookie_is_granted(cookie, &grants))
+            .collect();
+        let state = PortableProfileState {
+            version: PORTABLE_PROFILE_STATE_VERSION,
+            cookies,
+            origins,
+        };
+        enforce_profile_size(&state)?;
+        Ok(state)
+    }
+
+    /// Import a broker profile snapshot directly into a pristine context.
+    ///
+    /// This must be called before navigation. The complete payload is
+    /// validated before either store changes, and sessionStorage is absent by
+    /// construction.
+    pub fn import_portable_state(
+        &self,
+        state: PortableProfileState,
+        granted_origins: &[String],
+    ) -> Result<(), ProfileStateError> {
+        if state.version != PORTABLE_PROFILE_STATE_VERSION {
+            return Err(ProfileStateError::UnsupportedVersion(state.version));
+        }
+        enforce_profile_size(&state)?;
+        let grants = canonical_grants(granted_origins)?;
+        let mut origins = HashMap::new();
+        for origin_state in &state.origins {
+            let origin = canonical_https_origin(&origin_state.origin)?;
+            if !grants.contains(&origin) {
+                return Err(ProfileStateError::OriginNotGranted(origin));
+            }
+            if origins
+                .insert(
+                    origin.clone(),
+                    origin_state
+                        .local_storage
+                        .iter()
+                        .map(|entry| (entry.name.clone(), entry.value.clone()))
+                        .collect(),
+                )
+                .is_some()
+            {
+                return Err(ProfileStateError::InvalidOrigin(origin));
+            }
+        }
+        for cookie in &state.cookies {
+            if !cookie_is_granted(cookie, &grants) {
+                return Err(ProfileStateError::CookieDomainNotGranted(
+                    cookie.domain.clone(),
+                ));
+            }
+            if let Some(partition_key) = &cookie.partition_key {
+                let partition_key = canonical_https_origin(partition_key)?;
+                if !grants.contains(&partition_key) {
+                    return Err(ProfileStateError::OriginNotGranted(partition_key));
+                }
+            }
+        }
+
+        // Validate in detached stores first. Applying the already validated
+        // values below cannot fail, and callers invoke this before navigation.
+        let candidate_storage = OriginStorage::default();
+        candidate_storage.replace_all(origins.clone())?;
+        let candidate_cookies = CookieJar::new();
+        candidate_cookies.replace_portable_cookies(state.cookies.clone())?;
+
+        self.local_storage.replace_all(origins)?;
+        self.cookie_jar.replace_portable_cookies(state.cookies)?;
+        Ok(())
+    }
+}
+
+fn canonical_https_origin(raw: &str) -> Result<String, ProfileStateError> {
+    let parsed = url::Url::parse(raw).map_err(|_| ProfileStateError::InvalidOrigin(raw.into()))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.path(), "" | "/")
+    {
+        return Err(ProfileStateError::InvalidOrigin(raw.into()));
+    }
+    Ok(parsed.origin().ascii_serialization())
+}
+
+fn canonical_grants(origins: &[String]) -> Result<HashSet<String>, ProfileStateError> {
+    origins
+        .iter()
+        .map(|origin| canonical_https_origin(origin))
+        .collect()
+}
+
+fn cookie_is_granted(cookie: &PortableCookie, grants: &HashSet<String>) -> bool {
+    let domain = obscura_net::canonical_domain(&cookie.domain);
+    grants.iter().any(|origin| {
+        let Ok(url) = url::Url::parse(origin) else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        if cookie.host_only {
+            host.eq_ignore_ascii_case(&domain)
+        } else {
+            host.eq_ignore_ascii_case(&domain)
+                || host
+                    .strip_suffix(&domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        }
+    })
+}
+
+fn enforce_profile_size(state: &PortableProfileState) -> Result<(), ProfileStateError> {
+    let actual = serde_json::to_vec(state)?.len();
+    if actual > PORTABLE_PROFILE_STATE_MAX_BYTES {
+        return Err(ProfileStateError::TooLarge {
+            actual,
+            limit: PORTABLE_PROFILE_STATE_MAX_BYTES,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -231,12 +469,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn with_full_options_falls_back_to_chrome_default() {
-        let ctx = BrowserContext::with_full_options(
-            "test".to_string(),
-            None,
-            false,
-            None,
-        );
+        let ctx = BrowserContext::with_full_options("test".to_string(), None, false, None);
         assert!(ctx.user_agent.contains("Chrome"));
         let client_ua = ctx.http_client.user_agent.read().await.clone();
         assert!(client_ua.contains("Chrome"));
@@ -257,7 +490,10 @@ mod tests {
             false,
             Some("Template-UA/1.0".to_string()),
         );
-        source.cookie_jar.set_cookie("sid=source", &url::Url::parse("https://example.com").unwrap());
+        source.cookie_jar.set_cookie(
+            "sid=source",
+            &url::Url::parse("https://example.com").unwrap(),
+        );
 
         let persistent = source.isolated_copy("persistent".to_string(), true);
         let incognito = source.isolated_copy("incognito".to_string(), false);
@@ -269,9 +505,96 @@ mod tests {
             .get_cookie_header(&url::Url::parse("https://sub.example.com").unwrap())
             .is_empty());
         persistent.cookie_jar.clear();
-        persistent.http_client.set_user_agent("Changed-UA/2.0").await;
+        persistent
+            .http_client
+            .set_user_agent("Changed-UA/2.0")
+            .await;
 
         assert_eq!(source.cookie_jar.get_all_cookies().len(), 1);
-        assert_eq!(source.http_client.user_agent.read().await.as_str(), "Template-UA/1.0");
+        assert_eq!(
+            source.http_client.user_agent.read().await.as_str(),
+            "Template-UA/1.0"
+        );
+    }
+
+    #[test]
+    fn portable_state_roundtrip_is_direct_grant_scoped_and_has_no_session_storage() {
+        let source = BrowserContext::new("source".to_string());
+        source
+            .local_storage
+            .replace_all(HashMap::from([
+                (
+                    "https://example.com".to_string(),
+                    vec![("token".to_string(), "allowed".to_string())],
+                ),
+                (
+                    "https://other.test".to_string(),
+                    vec![("token".to_string(), "excluded".to_string())],
+                ),
+                (
+                    "opaque:7".to_string(),
+                    vec![("secret".to_string(), "excluded".to_string())],
+                ),
+            ]))
+            .unwrap();
+        source
+            .cookie_jar
+            .replace_portable_cookies(vec![PortableCookie {
+                name: "sid".to_string(),
+                value: "session".to_string(),
+                domain: "example.com".to_string(),
+                path: "/".to_string(),
+                host_only: true,
+                secure: true,
+                http_only: true,
+                same_site: "Lax".to_string(),
+                expires: None,
+                partition_key: None,
+            }])
+            .unwrap();
+
+        let grants = vec!["https://example.com".to_string()];
+        let state = source.export_portable_state(&grants).unwrap();
+        let encoded = serde_json::to_string(&state).unwrap();
+        assert!(!encoded.contains("sessionStorage"));
+        assert_eq!(state.origins.len(), 1);
+        assert_eq!(state.origins[0].origin, "https://example.com");
+        assert_eq!(state.cookies.len(), 1);
+
+        let destination = BrowserContext::new("destination".to_string());
+        destination
+            .import_portable_state(state.clone(), &grants)
+            .unwrap();
+        assert_eq!(destination.export_portable_state(&grants).unwrap(), state);
+    }
+
+    #[test]
+    fn rejected_profile_import_does_not_change_existing_state() {
+        let context = BrowserContext::new("profile".to_string());
+        context
+            .local_storage
+            .replace_all(HashMap::from([(
+                "https://example.com".to_string(),
+                vec![("existing".to_string(), "kept".to_string())],
+            )]))
+            .unwrap();
+        let before = context.local_storage.snapshot_all();
+        let state = PortableProfileState {
+            version: PORTABLE_PROFILE_STATE_VERSION,
+            cookies: Vec::new(),
+            origins: vec![PortableOriginState {
+                origin: "https://unapproved.test".to_string(),
+                local_storage: vec![PortableStorageEntry {
+                    name: "bad".to_string(),
+                    value: "value".to_string(),
+                }],
+            }],
+        };
+
+        assert!(matches!(
+            context.import_portable_state(state, &["https://example.com".to_string()]),
+            Err(ProfileStateError::OriginNotGranted(_))
+        ));
+        assert_eq!(context.local_storage.snapshot_all(), before);
     }
 }

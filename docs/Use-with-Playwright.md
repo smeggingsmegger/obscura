@@ -88,8 +88,9 @@ await context.setStorageState(JSON.parse(await readFile('state.json', 'utf8')));
 ```
 
 `sessionStorage` is page-local and is not part of Playwright's standard
-`storageState` file. Use `--storage-dir` when the whole Obscura server should
-share persistent cookies and localStorage automatically.
+`storageState` file. `--storage-dir` persists cookies only; use Playwright's
+state file for localStorage or the trusted Rust broker API for a bounded,
+origin-granted profile.
 
 ## Intercept requests
 
@@ -172,9 +173,9 @@ await browser.close();  // closes the CDP connection, leaves obscura serve runni
 
 - Playwright `page.video()` and tracing artifacts that require desktop capture
   are not implemented. Use the raw CDP flow above for page frames.
-- `BrowserContext` `storageState` does not include `sessionStorage`. Use
-  `--storage-dir` when the whole Obscura server should share persistent state,
-  as described in [Persist cookies and storage](Persist-cookies-and-storage.md).
+- `BrowserContext` `storageState` does not include `sessionStorage`.
+  `--storage-dir` is cookie-only, as described in
+  [Persist cookies and storage](Persist-cookies-and-storage.md).
 - Service workers, native media, some Web APIs, long-tail CSS, and compositor
   behavior remain incomplete relative to Chromium.
 - PDF text is not selectable/searchable and tagged PDF is not yet available.

@@ -52,11 +52,24 @@ struct RpcError {
 
 impl RpcResponse {
     fn ok(id: Value, result: Value) -> Self {
-        RpcResponse { jsonrpc: "2.0", id, result: Some(result), error: None }
+        RpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     fn err(id: Value, code: i32, message: impl Into<String>) -> Self {
-        RpcResponse { jsonrpc: "2.0", id, result: None, error: Some(RpcError { code, message: message.into() }) }
+        RpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+            }),
+        }
     }
 }
 
@@ -85,7 +98,11 @@ impl BrowserState {
             tabs: std::collections::BTreeMap::new(),
             active_tab: None,
             tab_counter: 0,
-            context: Arc::new(BrowserContext::with_options("mcp".to_string(), proxy, stealth)),
+            context: Arc::new(BrowserContext::with_options(
+                "mcp".to_string(),
+                proxy,
+                stealth,
+            )),
             user_agent,
             console_messages: Vec::new(),
             interactive_refs: HashMap::new(),
@@ -224,7 +241,12 @@ impl BrowserState {
     }
 }
 
-pub(crate) async fn dispatch(method: &str, id: Value, params: &Value, state: &mut BrowserState) -> RpcResponse {
+pub(crate) async fn dispatch(
+    method: &str,
+    id: Value,
+    params: &Value,
+    state: &mut BrowserState,
+) -> RpcResponse {
     match method {
         "initialize" => handle_initialize(id, params),
         "ping" => RpcResponse::ok(id, json!({})),
@@ -300,19 +322,25 @@ pub async fn run(proxy: Option<String>, user_agent: Option<String>, stealth: boo
 }
 
 fn handle_initialize(id: Value, params: &Value) -> RpcResponse {
-    let _client_version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or("");
-    RpcResponse::ok(id, json!({
-        "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "tools": {}
-        },
-        "serverInfo": {
-            "name": "obscura-mcp",
-            // Same build version the CLI reports (tag-derived at release time),
-            // so MCP clients see the version the binary was actually cut from.
-            "version": env!("OBSCURA_BUILD_VERSION")
-        }
-    }))
+    let _client_version = params
+        .get("protocolVersion")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    RpcResponse::ok(
+        id,
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "obscura-mcp",
+                // Same build version the CLI reports (tag-derived at release time),
+                // so MCP clients see the version the binary was actually cut from.
+                "version": env!("OBSCURA_BUILD_VERSION")
+            }
+        }),
+    )
 }
 
 fn handle_tools_list(id: Value) -> RpcResponse {
@@ -500,37 +528,6 @@ fn handle_tools_list(id: Value) -> RpcResponse {
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
-                "name": "browser_get_cookies",
-                "description": "Return all cookies in the browser's cookie jar as one JSON object per line.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "domain": { "type": "string", "description": "Filter to cookies on this domain (default: all)" }
-                    }
-                }
-            },
-            {
-                "name": "browser_set_cookie",
-                "description": "Add or replace a cookie in the jar. Use this to skip a login flow when you already have a session token.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string" },
-                        "value": { "type": "string" },
-                        "domain": { "type": "string", "description": "e.g. example.com or .example.com" },
-                        "path": { "type": "string", "description": "default '/'" },
-                        "secure": { "type": "boolean" },
-                        "http_only": { "type": "boolean" }
-                    },
-                    "required": ["name", "value", "domain"]
-                }
-            },
-            {
-                "name": "browser_clear_cookies",
-                "description": "Wipe every cookie from the jar.",
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
                 "name": "browser_wait_for_text",
                 "description": "Wait until a substring appears anywhere in the rendered page text. Use when you want to wait for a result message or notification rather than a specific selector.",
                 "inputSchema": {
@@ -671,25 +668,6 @@ fn handle_tools_list(id: Value) -> RpcResponse {
                     },
                     "required": ["query"]
                 }
-            },
-            {
-                "name": "browser_storage_state",
-                "description": "Export the full authentication / session state (cookies + localStorage + sessionStorage) as a JSON object. Save this to skip a login on a subsequent run via browser_set_storage_state.",
-                "inputSchema": { "type": "object", "properties": {} }
-            },
-            {
-                "name": "browser_set_storage_state",
-                "description": "Restore session state previously returned by browser_storage_state. Pass the JSON object. Use to bring an authenticated session back without re-logging in.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "state": {
-                            "type": "object",
-                            "description": "{cookies: [...], origins: [{origin, localStorage: [...], sessionStorage: [...]}]}"
-                        }
-                    },
-                    "required": ["state"]
-                }
             }
     ]).as_array().cloned().expect("MCP tool list must be an array");
 
@@ -750,10 +728,13 @@ async fn handle_tool_call(id: Value, params: &Value, state: &mut BrowserState) -
         if let Some(result) = media_result {
             return match result {
                 Ok(content) => RpcResponse::ok(id, json!({ "content": [content] })),
-                Err(error) => RpcResponse::ok(id, json!({
-                    "content": [{ "type": "text", "text": format!("Error: {error}") }],
-                    "isError": true
-                })),
+                Err(error) => RpcResponse::ok(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": format!("Error: {error}") }],
+                        "isError": true
+                    }),
+                ),
             };
         }
     }
@@ -778,9 +759,6 @@ async fn handle_tool_call(id: Value, params: &Value, state: &mut BrowserState) -
         "browser_back" => tool_back(state).await,
         "browser_forward" => tool_forward(state).await,
         "browser_reload" => tool_reload(state).await,
-        "browser_get_cookies" => tool_get_cookies(args, state),
-        "browser_set_cookie" => tool_set_cookie(args, state),
-        "browser_clear_cookies" => tool_clear_cookies(state),
         "browser_wait_for_text" => tool_wait_for_text(args, state).await,
         // Tier 2 agent-UX additions
         "browser_detect_forms" => tool_detect_forms(state),
@@ -794,19 +772,23 @@ async fn handle_tool_call(id: Value, params: &Value, state: &mut BrowserState) -
         "browser_tab_switch" => tool_tab_switch(args, state),
         "browser_tab_close" => tool_tab_close(args, state),
         "browser_search" => tool_search(args, state),
-        "browser_storage_state" => tool_storage_state(state),
-        "browser_set_storage_state" => tool_set_storage_state(args, state),
         _ => Err(format!("Unknown tool: {name}")),
     };
 
     match result {
-        Ok(content) => RpcResponse::ok(id, json!({
-            "content": [{ "type": "text", "text": content }]
-        })),
-        Err(e) => RpcResponse::ok(id, json!({
-            "content": [{ "type": "text", "text": format!("Error: {e}") }],
-            "isError": true
-        })),
+        Ok(content) => RpcResponse::ok(
+            id,
+            json!({
+                "content": [{ "type": "text", "text": content }]
+            }),
+        ),
+        Err(e) => RpcResponse::ok(
+            id,
+            json!({
+                "content": [{ "type": "text", "text": format!("Error: {e}") }],
+                "isError": true
+            }),
+        ),
     }
 }
 
@@ -827,7 +809,9 @@ fn optional_number(args: &Value, name: &str) -> Result<Option<f32>, String> {
     let Some(value) = args.get(name) else {
         return Ok(None);
     };
-    let value = value.as_f64().ok_or_else(|| format!("'{name}' must be a number"))?;
+    let value = value
+        .as_f64()
+        .ok_or_else(|| format!("'{name}' must be a number"))?;
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(format!("'{name}' must be a finite number"));
     }
@@ -839,7 +823,10 @@ fn optional_bool(args: &Value, name: &str) -> Result<Option<bool>, String> {
     let Some(value) = args.get(name) else {
         return Ok(None);
     };
-    value.as_bool().map(Some).ok_or_else(|| format!("'{name}' must be a boolean"))
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("'{name}' must be a boolean"))
 }
 
 #[cfg(feature = "render")]
@@ -847,10 +834,16 @@ fn validate_screenshot_viewport(viewport: (f32, f32)) -> Result<(), String> {
     const MAX_DIMENSION: f32 = 32_768.0;
     const MAX_PIXELS: f64 = (16 * 1024 * 1024) as f64;
     let (width, height) = viewport;
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0
-        || width > MAX_DIMENSION || height > MAX_DIMENSION
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || width > MAX_DIMENSION
+        || height > MAX_DIMENSION
     {
-        return Err("screenshot dimensions must be finite, positive, and at most 32768 CSS pixels".into());
+        return Err(
+            "screenshot dimensions must be finite, positive, and at most 32768 CSS pixels".into(),
+        );
     }
     if f64::from(width.ceil()) * f64::from(height.ceil()) > MAX_PIXELS {
         return Err("screenshot dimensions exceed the 16-megapixel capture limit".into());
@@ -870,7 +863,9 @@ async fn tool_screenshot(args: &Value, state: &mut BrowserState) -> Result<Value
 
     let page = state.page_mut();
     let _ = page.prepare_screenshot_resources(1_000).await;
-    let png = page.screenshot(viewport).ok_or("the current page has no renderable viewport")?;
+    let png = page
+        .screenshot(viewport)
+        .ok_or("the current page has no renderable viewport")?;
     Ok(json!({
         "type": "image",
         "data": BASE64.encode(png),
@@ -880,24 +875,54 @@ async fn tool_screenshot(args: &Value, state: &mut BrowserState) -> Result<Value
 
 #[cfg(feature = "render")]
 async fn tool_pdf(args: &Value, state: &mut BrowserState) -> Result<Value, String> {
-    validate_tool_options(args, &[
-        "landscape", "print_background", "scale", "paper_width", "paper_height",
-        "margin_top", "margin_bottom", "margin_left", "margin_right",
-    ])?;
+    validate_tool_options(
+        args,
+        &[
+            "landscape",
+            "print_background",
+            "scale",
+            "paper_width",
+            "paper_height",
+            "margin_top",
+            "margin_bottom",
+            "margin_left",
+            "margin_right",
+        ],
+    )?;
     let mut options = obscura_browser::RasterPdfOptions::default();
-    if let Some(value) = optional_bool(args, "landscape")? { options.landscape = value; }
-    if let Some(value) = optional_bool(args, "print_background")? { options.print_background = value; }
-    if let Some(value) = optional_number(args, "scale")? { options.scale = value; }
-    if let Some(value) = optional_number(args, "paper_width")? { options.paper_width_in = value; }
-    if let Some(value) = optional_number(args, "paper_height")? { options.paper_height_in = value; }
-    if let Some(value) = optional_number(args, "margin_top")? { options.margin_top_in = value; }
-    if let Some(value) = optional_number(args, "margin_bottom")? { options.margin_bottom_in = value; }
-    if let Some(value) = optional_number(args, "margin_left")? { options.margin_left_in = value; }
-    if let Some(value) = optional_number(args, "margin_right")? { options.margin_right_in = value; }
+    if let Some(value) = optional_bool(args, "landscape")? {
+        options.landscape = value;
+    }
+    if let Some(value) = optional_bool(args, "print_background")? {
+        options.print_background = value;
+    }
+    if let Some(value) = optional_number(args, "scale")? {
+        options.scale = value;
+    }
+    if let Some(value) = optional_number(args, "paper_width")? {
+        options.paper_width_in = value;
+    }
+    if let Some(value) = optional_number(args, "paper_height")? {
+        options.paper_height_in = value;
+    }
+    if let Some(value) = optional_number(args, "margin_top")? {
+        options.margin_top_in = value;
+    }
+    if let Some(value) = optional_number(args, "margin_bottom")? {
+        options.margin_bottom_in = value;
+    }
+    if let Some(value) = optional_number(args, "margin_left")? {
+        options.margin_left_in = value;
+    }
+    if let Some(value) = optional_number(args, "margin_right")? {
+        options.margin_right_in = value;
+    }
 
     let page = state.page_mut();
     let _ = page.prepare_screenshot_resources(1_000).await;
-    let pdf = page.raster_pdf(options).map_err(|error| error.to_string())?;
+    let pdf = page
+        .raster_pdf(options)
+        .map_err(|error| error.to_string())?;
     Ok(json!({
         "type": "resource",
         "resource": {
@@ -935,7 +960,9 @@ fn truncate(text: &str, max_chars: usize) -> String {
 }
 
 async fn tool_navigate(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let url = args.get("url").and_then(Value::as_str)
+    let url = args
+        .get("url")
+        .and_then(Value::as_str)
         .ok_or("Missing url parameter")?;
     if url::Url::parse(url)
         .ok()
@@ -943,7 +970,10 @@ async fn tool_navigate(args: &Value, state: &mut BrowserState) -> Result<String,
     {
         return Err("file:// navigation is disabled for MCP".to_string());
     }
-    let wait_until = args.get("waitUntil").and_then(Value::as_str).unwrap_or("load");
+    let wait_until = args
+        .get("waitUntil")
+        .and_then(Value::as_str)
+        .unwrap_or("load");
 
     let condition = obscura_browser::lifecycle::WaitUntil::from_str(wait_until);
     let ua = state.user_agent.clone();
@@ -952,7 +982,8 @@ async fn tool_navigate(args: &Value, state: &mut BrowserState) -> Result<String,
         page.http_client.set_user_agent(ua).await;
     }
 
-    page.navigate_with_wait(url, condition).await
+    page.navigate_with_wait(url, condition)
+        .await
         .map_err(|e| e.to_string())?;
 
     let summary = format!("Navigated to {} — \"{}\"", page.url_string(), page.title);
@@ -962,20 +993,25 @@ async fn tool_navigate(args: &Value, state: &mut BrowserState) -> Result<String,
 }
 
 fn tool_snapshot(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let max_chars = args.get("max_chars").and_then(Value::as_u64).map(|n| n as usize)
+    let max_chars = args
+        .get("max_chars")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
         .unwrap_or(DEFAULT_TEXT_LIMIT);
     rebuild_interactive_refs(state)?;
     let page = state.page_mut();
     let url = page.url_string();
     let title = page.title.clone();
 
-    let body_text = page.with_dom(|dom| {
-        if let Ok(Some(body)) = dom.query_selector("body") {
-            extract_text(dom, body)
-        } else {
-            String::new()
-        }
-    }).unwrap_or_default();
+    let body_text = page
+        .with_dom(|dom| {
+            if let Ok(Some(body)) = dom.query_selector("body") {
+                extract_text(dom, body)
+            } else {
+                String::new()
+            }
+        })
+        .unwrap_or_default();
 
     let refs_summary = if state.interactive_refs.is_empty() {
         String::new()
@@ -987,7 +1023,9 @@ fn tool_snapshot(args: &Value, state: &mut BrowserState) -> Result<String, Strin
     };
 
     let body = truncate(body_text.trim(), max_chars);
-    Ok(format!("URL: {url}\nTitle: {title}\n\n{body}{refs_summary}"))
+    Ok(format!(
+        "URL: {url}\nTitle: {title}\n\n{body}{refs_summary}"
+    ))
 }
 
 async fn tool_click(args: &Value, state: &mut BrowserState) -> Result<String, String> {
@@ -1017,7 +1055,9 @@ async fn tool_click(args: &Value, state: &mut BrowserState) -> Result<String, St
 
 async fn tool_fill(args: &Value, state: &mut BrowserState) -> Result<String, String> {
     let selector = resolve_target(args, state)?;
-    let value = args.get("value").and_then(Value::as_str)
+    let value = args
+        .get("value")
+        .and_then(Value::as_str)
         .ok_or("Missing value parameter")?;
 
     let js = format!(
@@ -1044,7 +1084,9 @@ async fn tool_fill(args: &Value, state: &mut BrowserState) -> Result<String, Str
 
 async fn tool_type(args: &Value, state: &mut BrowserState) -> Result<String, String> {
     let selector = resolve_target(args, state)?;
-    let text = args.get("text").and_then(Value::as_str)
+    let text = args
+        .get("text")
+        .and_then(Value::as_str)
         .ok_or("Missing text parameter")?;
 
     let js = format!(
@@ -1069,12 +1111,17 @@ async fn tool_type(args: &Value, state: &mut BrowserState) -> Result<String, Str
 }
 
 async fn tool_press_key(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let key = args.get("key").and_then(Value::as_str)
+    let key = args
+        .get("key")
+        .and_then(Value::as_str)
         .ok_or("Missing key parameter")?;
     let selector = args.get("selector").and_then(Value::as_str);
 
     let target = match selector {
-        Some(sel) => format!("document.querySelector({})", serde_json::to_string(sel).unwrap()),
+        Some(sel) => format!(
+            "document.querySelector({})",
+            serde_json::to_string(sel).unwrap()
+        ),
         None => "document".to_string(),
     };
 
@@ -1096,9 +1143,13 @@ async fn tool_press_key(args: &Value, state: &mut BrowserState) -> Result<String
 }
 
 fn tool_select_option(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let selector = args.get("selector").and_then(Value::as_str)
+    let selector = args
+        .get("selector")
+        .and_then(Value::as_str)
         .ok_or("Missing selector parameter")?;
-    let value = args.get("value").and_then(Value::as_str)
+    let value = args
+        .get("value")
+        .and_then(Value::as_str)
         .ok_or("Missing value parameter")?;
 
     let js = format!(
@@ -1125,7 +1176,9 @@ fn tool_select_option(args: &Value, state: &mut BrowserState) -> Result<String, 
 }
 
 async fn tool_evaluate(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let expression = args.get("expression").and_then(Value::as_str)
+    let expression = args
+        .get("expression")
+        .and_then(Value::as_str)
         .ok_or("Missing expression parameter")?;
 
     let result = state.page_mut().evaluate(expression);
@@ -1138,7 +1191,9 @@ async fn tool_evaluate(args: &Value, state: &mut BrowserState) -> Result<String,
 }
 
 async fn tool_wait_for(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let selector = args.get("selector").and_then(Value::as_str)
+    let selector = args
+        .get("selector")
+        .and_then(Value::as_str)
         .ok_or("Missing selector parameter")?;
     let timeout_secs = args.get("timeout").and_then(Value::as_f64).unwrap_or(30.0) as u64;
 
@@ -1149,9 +1204,10 @@ async fn tool_wait_for(args: &Value, state: &mut BrowserState) -> Result<String,
     // the next 200ms tick.
     let mut tick_ms: u64 = 5;
     loop {
-        let found = state.page_mut().with_dom(|dom| {
-            dom.query_selector(selector).ok().flatten().is_some()
-        }).unwrap_or(false);
+        let found = state
+            .page_mut()
+            .with_dom(|dom| dom.query_selector(selector).ok().flatten().is_some())
+            .unwrap_or(false);
 
         if found {
             return Ok(format!("Found '{selector}'"));
@@ -1168,7 +1224,9 @@ async fn tool_wait_for(args: &Value, state: &mut BrowserState) -> Result<String,
             }
             Err(_) => {}
         }
-        if tick_ms < 200 { tick_ms = (tick_ms * 2).min(200); }
+        if tick_ms < 200 {
+            tick_ms = (tick_ms * 2).min(200);
+        }
     }
 }
 
@@ -1181,9 +1239,10 @@ fn tool_network_requests(state: &mut BrowserState) -> Result<String, String> {
         return Ok("No network requests recorded.".to_string());
     }
 
-    let lines: Vec<String> = events.iter().map(|e| {
-        format!("[{}] {} {} ({}B)", e.status, e.method, e.url, e.body_size)
-    }).collect();
+    let lines: Vec<String> = events
+        .iter()
+        .map(|e| format!("[{}] {} {} ({}B)", e.status, e.method, e.url, e.body_size))
+        .collect();
 
     Ok(lines.join("\n"))
 }
@@ -1222,7 +1281,10 @@ fn tool_close(state: &mut BrowserState) -> Result<String, String> {
 /// already used by `obscura fetch --dump markdown`. More token-dense than
 /// browser_snapshot for content-heavy pages (article bodies, docs sites).
 fn tool_markdown(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let max_chars = args.get("max_chars").and_then(Value::as_u64).map(|n| n as usize)
+    let max_chars = args
+        .get("max_chars")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
         .unwrap_or(DEFAULT_TEXT_LIMIT);
     let page = state.page_mut();
     let result = page.evaluate(obscura_browser::HTML_TO_MARKDOWN_JS);
@@ -1234,7 +1296,10 @@ fn tool_markdown(args: &Value, state: &mut BrowserState) -> Result<String, Strin
 /// the agent can grep / split without round-tripping to a JSON parser.
 fn tool_links(args: &Value, state: &mut BrowserState) -> Result<String, String> {
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
-    let internal_only = args.get("internal_only").and_then(Value::as_bool).unwrap_or(false);
+    let internal_only = args
+        .get("internal_only")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let page = state.page_mut();
     let base_origin = url::Url::parse(&page.url_string())
         .ok()
@@ -1258,10 +1323,14 @@ fn tool_links(args: &Value, state: &mut BrowserState) -> Result<String, String> 
     })()"#;
     let val = page.evaluate(js);
     let arr = val.as_array().cloned().unwrap_or_default();
-    let lines: Vec<String> = arr.into_iter()
+    let lines: Vec<String> = arr
+        .into_iter()
         .filter(|item| {
-            if !internal_only { return true; }
-            item.get("href").and_then(|v| v.as_str())
+            if !internal_only {
+                return true;
+            }
+            item.get("href")
+                .and_then(|v| v.as_str())
                 .and_then(|h| url::Url::parse(h).ok())
                 .map(|u| u.origin() == base_origin)
                 .unwrap_or(false)
@@ -1287,7 +1356,8 @@ fn tool_interactive_elements(args: &Value, state: &mut BrowserState) -> Result<S
         return Ok("No interactive elements on this page.".to_string());
     }
     let page = state.page_mut();
-    let js = format!(r#"(function(){{
+    let js = format!(
+        r#"(function(){{
         var els = document.querySelectorAll('[data-obscura-ref]');
         var out = [];
         for (var i = 0; i < els.length && out.length < {limit}; i++) {{
@@ -1305,20 +1375,34 @@ fn tool_interactive_elements(args: &Value, state: &mut BrowserState) -> Result<S
             }});
         }}
         return out;
-    }})()"#);
+    }})()"#
+    );
     let val = page.evaluate(&js);
     let arr = val.as_array().cloned().unwrap_or_default();
-    let lines: Vec<String> = arr.into_iter().map(|item| {
-        let r = item.get("ref").and_then(|v| v.as_str()).unwrap_or("?");
-        let tag = item.get("tag").and_then(|v| v.as_str()).unwrap_or("?");
-        let ty = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
-        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        let kind = if !ty.is_empty() { format!("{tag}[{ty}]") } else if !role.is_empty() { format!("{tag}[role={role}]") } else { tag.to_string() };
-        let detail = if !name.is_empty() { format!(" name={name:?}") } else { String::new() };
-        format!("ref={r:<5} {kind:<22} {label:?}{detail}")
-    }).collect();
+    let lines: Vec<String> = arr
+        .into_iter()
+        .map(|item| {
+            let r = item.get("ref").and_then(|v| v.as_str()).unwrap_or("?");
+            let tag = item.get("tag").and_then(|v| v.as_str()).unwrap_or("?");
+            let ty = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let kind = if !ty.is_empty() {
+                format!("{tag}[{ty}]")
+            } else if !role.is_empty() {
+                format!("{tag}[role={role}]")
+            } else {
+                tag.to_string()
+            };
+            let detail = if !name.is_empty() {
+                format!(" name={name:?}")
+            } else {
+                String::new()
+            };
+            format!("ref={r:<5} {kind:<22} {label:?}{detail}")
+        })
+        .collect();
     Ok(lines.join("\n"))
 }
 
@@ -1342,8 +1426,13 @@ fn rebuild_interactive_refs(state: &mut BrowserState) -> Result<(), String> {
         return refs;
     })()"#;
     let val = page.evaluate(tag_js);
-    let refs: Vec<String> = val.as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    let refs: Vec<String> = val
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     // Map ref -> nid via a second pass so ref_to_selector can sanity-check.
     for r in refs {
@@ -1371,7 +1460,9 @@ async fn tool_back(state: &mut BrowserState) -> Result<String, String> {
     page.set_history_index(prev_idx);
     let condition = obscura_browser::lifecycle::WaitUntil::DomContentLoaded;
     let stash = (page.history.clone(), page.history_index);
-    page.navigate_with_wait(&url, condition).await.map_err(|e| e.to_string())?;
+    page.navigate_with_wait(&url, condition)
+        .await
+        .map_err(|e| e.to_string())?;
     let page = state.page_mut();
     page.history = stash.0;
     page.history_index = stash.1;
@@ -1389,7 +1480,9 @@ async fn tool_forward(state: &mut BrowserState) -> Result<String, String> {
     page.set_history_index(next_idx);
     let condition = obscura_browser::lifecycle::WaitUntil::DomContentLoaded;
     let stash = (page.history.clone(), page.history_index);
-    page.navigate_with_wait(&url, condition).await.map_err(|e| e.to_string())?;
+    page.navigate_with_wait(&url, condition)
+        .await
+        .map_err(|e| e.to_string())?;
     let page = state.page_mut();
     page.history = stash.0;
     page.history_index = stash.1;
@@ -1403,71 +1496,30 @@ async fn tool_reload(state: &mut BrowserState) -> Result<String, String> {
         return Err("Nothing to reload.".to_string());
     }
     let condition = obscura_browser::lifecycle::WaitUntil::DomContentLoaded;
-    state.page_mut().navigate_with_wait(&url, condition).await.map_err(|e| e.to_string())?;
+    state
+        .page_mut()
+        .navigate_with_wait(&url, condition)
+        .await
+        .map_err(|e| e.to_string())?;
     state.interactive_refs.clear();
     Ok(format!("Reloaded {url}"))
 }
 
-fn tool_get_cookies(args: &Value, state: &BrowserState) -> Result<String, String> {
-    let domain_filter = args.get("domain").and_then(Value::as_str);
-    let cookies = state.context.cookie_jar.get_all_cookies();
-    let lines: Vec<String> = cookies.iter()
-        .filter(|c| domain_filter.is_none_or(|d| c.domain == obscura_net::canonical_domain(d)))
-        .map(|c| serde_json::to_string(&json!({
-            "name": c.name,
-            "value": c.value,
-            "domain": c.domain,
-            "path": c.path,
-            "secure": c.secure,
-            "http_only": c.http_only,
-        })).unwrap_or_default())
-        .collect();
-    if lines.is_empty() {
-        Ok("No cookies.".to_string())
-    } else {
-        Ok(lines.join("\n"))
-    }
-}
-
-fn tool_set_cookie(args: &Value, state: &BrowserState) -> Result<String, String> {
-    let name = args.get("name").and_then(Value::as_str)
-        .ok_or("Missing name parameter")?;
-    let value = args.get("value").and_then(Value::as_str)
-        .ok_or("Missing value parameter")?;
-    let domain = args.get("domain").and_then(Value::as_str)
-        .ok_or("Missing domain parameter")?;
-    let path = args.get("path").and_then(Value::as_str).unwrap_or("/");
-    let secure = args.get("secure").and_then(Value::as_bool).unwrap_or(false);
-    let http_only = args.get("http_only").and_then(Value::as_bool).unwrap_or(false);
-    let cookie = obscura_net::CookieInfo {
-        name: name.to_string(),
-        value: value.to_string(),
-        domain: domain.to_string(),
-        path: path.to_string(),
-        secure,
-        http_only,
-        same_site: String::new(),
-        expires: None,
-    };
-    state.context.cookie_jar.set_cookies_from_cdp(vec![cookie]);
-    Ok(format!("Set cookie {name} on {domain}{path}"))
-}
-
-fn tool_clear_cookies(state: &BrowserState) -> Result<String, String> {
-    state.context.cookie_jar.clear();
-    Ok("Cleared all cookies.".to_string())
-}
-
 async fn tool_wait_for_text(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let needle = args.get("text").and_then(Value::as_str)
+    let needle = args
+        .get("text")
+        .and_then(Value::as_str)
         .ok_or("Missing text parameter")?;
     let timeout_secs = args.get("timeout").and_then(Value::as_f64).unwrap_or(30.0) as u64;
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
     let escaped = serde_json::to_string(needle).unwrap_or_else(|_| "\"\"".to_string());
-    let js = format!(r#"(function(){{
+    let js = format!(
+        r#"(function(){{
         var t = (document.body && (document.body.innerText || document.body.textContent)) || '';
         return t.indexOf({needle}) >= 0;
-    }})()"#, needle = escaped);
+    }})()"#,
+        needle = escaped
+    );
     // Exponential backoff like browser_wait_for (see comment there).
     let mut tick_ms: u64 = 5;
     loop {
@@ -1485,7 +1537,9 @@ async fn tool_wait_for_text(args: &Value, state: &mut BrowserState) -> Result<St
             }
             Err(_) => {}
         }
-        if tick_ms < 200 { tick_ms = (tick_ms * 2).min(200); }
+        if tick_ms < 200 {
+            tick_ms = (tick_ms * 2).min(200);
+        }
     }
 }
 
@@ -1559,7 +1613,9 @@ fn tool_detect_forms(state: &mut BrowserState) -> Result<String, String> {
 /// 'select' picks an option by value or visible text. Optional
 /// `submit_ref`/`submit_selector` clicks after filling.
 fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let fields = args.get("fields").and_then(Value::as_array)
+    let fields = args
+        .get("fields")
+        .and_then(Value::as_array)
         .ok_or("Missing fields array")?
         .clone();
     let mut filled = 0u32;
@@ -1569,26 +1625,36 @@ fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, Stri
         let kind = field.get("type").and_then(Value::as_str).unwrap_or("text");
         let selector = match resolve_target(&field, state) {
             Ok(s) => s,
-            Err(e) => { errors.push(e); continue; }
+            Err(e) => {
+                errors.push(e);
+                continue;
+            }
         };
         let js = match kind {
-            "check" => format!(r#"(function(){{
+            "check" => format!(
+                r#"(function(){{
                 var el = document.querySelector({sel});
                 if (!el) return "error:not found";
                 globalThis.__obscura_setFieldValue(el, 'checked', true);
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('input', {{bubbles:true}})));
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('change', {{bubbles:true}})));
                 return "ok";
-            }})()"#, sel = serde_json::to_string(&selector).unwrap()),
-            "uncheck" => format!(r#"(function(){{
+            }})()"#,
+                sel = serde_json::to_string(&selector).unwrap()
+            ),
+            "uncheck" => format!(
+                r#"(function(){{
                 var el = document.querySelector({sel});
                 if (!el) return "error:not found";
                 globalThis.__obscura_setFieldValue(el, 'checked', false);
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('input', {{bubbles:true}})));
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('change', {{bubbles:true}})));
                 return "ok";
-            }})()"#, sel = serde_json::to_string(&selector).unwrap()),
-            "select" => format!(r#"(function(){{
+            }})()"#,
+                sel = serde_json::to_string(&selector).unwrap()
+            ),
+            "select" => format!(
+                r#"(function(){{
                 var el = document.querySelector({sel});
                 if (!el) return "error:not found";
                 var want = {val};
@@ -1605,15 +1671,22 @@ fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, Stri
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('input', {{bubbles:true}})));
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('change', {{bubbles:true}})));
                 return "ok";
-            }})()"#, sel = serde_json::to_string(&selector).unwrap(), val = serde_json::to_string(value).unwrap()),
-            _ => format!(r#"(function(){{
+            }})()"#,
+                sel = serde_json::to_string(&selector).unwrap(),
+                val = serde_json::to_string(value).unwrap()
+            ),
+            _ => format!(
+                r#"(function(){{
                 var el = document.querySelector({sel});
                 if (!el) return "error:not found";
                 globalThis.__obscura_setFieldValue(el, 'value', {val});
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('input', {{bubbles:true}})));
                 el.dispatchEvent(globalThis.__obscura_markTrusted(new Event('change', {{bubbles:true}})));
                 return "ok";
-            }})()"#, sel = serde_json::to_string(&selector).unwrap(), val = serde_json::to_string(value).unwrap()),
+            }})()"#,
+                sel = serde_json::to_string(&selector).unwrap(),
+                val = serde_json::to_string(value).unwrap()
+            ),
         };
         let res = state.page_mut().evaluate(&js);
         match res.as_str() {
@@ -1624,20 +1697,26 @@ fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, Stri
     }
 
     // Optional submit click
-    let submit_target = if args.get("submit_ref").is_some() || args.get("submit_selector").is_some() {
+    let submit_target = if args.get("submit_ref").is_some() || args.get("submit_selector").is_some()
+    {
         let pseudo = json!({
             "ref": args.get("submit_ref"),
             "selector": args.get("submit_selector"),
         });
         resolve_target(&pseudo, state).ok()
-    } else { None };
+    } else {
+        None
+    };
     if let Some(sel) = submit_target {
-        let js = format!(r#"(function(){{
+        let js = format!(
+            r#"(function(){{
             var el = document.querySelector({sel});
             if (!el) return "error:not found";
             el.click();
             return "ok";
-        }})()"#, sel = serde_json::to_string(&sel).unwrap());
+        }})()"#,
+            sel = serde_json::to_string(&sel).unwrap()
+        );
         let _ = state.page_mut().evaluate(&js);
         state.interactive_refs.clear();
     }
@@ -1645,7 +1724,10 @@ fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, Stri
     if errors.is_empty() {
         Ok(format!("Filled {filled} fields."))
     } else {
-        Ok(format!("Filled {filled} fields. Errors: {}", errors.join("; ")))
+        Ok(format!(
+            "Filled {filled} fields. Errors: {}",
+            errors.join("; ")
+        ))
     }
 }
 
@@ -1653,30 +1735,40 @@ fn tool_fill_form(args: &Value, state: &mut BrowserState) -> Result<String, Stri
 /// element into view. Used to trigger infinite-scroll loaders or to
 /// reach off-viewport content. Returns the new scroll position.
 fn tool_scroll(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let direction = args.get("direction").and_then(Value::as_str).unwrap_or("down");
+    let direction = args
+        .get("direction")
+        .and_then(Value::as_str)
+        .unwrap_or("down");
     let amount = args.get("amount").and_then(Value::as_f64);
 
     // Element scroll-into-view path
     if args.get("ref").is_some() || args.get("selector").is_some() {
         let selector = resolve_target(args, state)?;
-        let js = format!(r#"(function(){{
+        let js = format!(
+            r#"(function(){{
             var el = document.querySelector({sel});
             if (!el) return "error:not found";
             el.scrollIntoView({{behavior:'instant', block:'center'}});
             return JSON.stringify({{x: window.scrollX, y: window.scrollY}});
-        }})()"#, sel = serde_json::to_string(&selector).unwrap());
+        }})()"#,
+            sel = serde_json::to_string(&selector).unwrap()
+        );
         let res = state.page_mut().evaluate(&js);
         if res.as_str() == Some("error:not found") {
             return Err(format!("Element not found: {selector}"));
         }
-        return Ok(format!("Scrolled element into view. {}", res.as_str().unwrap_or("")));
+        return Ok(format!(
+            "Scrolled element into view. {}",
+            res.as_str().unwrap_or("")
+        ));
     }
 
     // Page-level scroll. Also dispatch a 'scroll' event so infinite-
     // scroll handlers fire (we don't have a real layout engine, so the
     // window.scrollY value won't change but the event is what matters).
     let amt = amount.unwrap_or(720.0);
-    let js = format!(r#"(function(){{
+    let js = format!(
+        r#"(function(){{
         var dir = {dir};
         var amt = {amt};
         switch (dir) {{
@@ -1697,14 +1789,20 @@ fn tool_scroll(args: &Value, state: &mut BrowserState) -> Result<String, String>
     let res = state.page_mut().evaluate(&js);
     // A scroll can reveal new DOM (infinite scroll); invalidate refs.
     state.interactive_refs.clear();
-    Ok(format!("Scrolled {direction}. {}", res.as_str().unwrap_or("")))
+    Ok(format!(
+        "Scrolled {direction}. {}",
+        res.as_str().unwrap_or("")
+    ))
 }
 
 fn tool_get_attribute(args: &Value, state: &mut BrowserState) -> Result<String, String> {
     let selector = resolve_target(args, state)?;
-    let attr = args.get("attribute").and_then(Value::as_str)
+    let attr = args
+        .get("attribute")
+        .and_then(Value::as_str)
         .ok_or("Missing attribute parameter")?;
-    let js = format!(r#"(function(){{
+    let js = format!(
+        r#"(function(){{
         var el = document.querySelector({sel});
         if (!el) return null;
         var v = el.getAttribute({a});
@@ -1722,7 +1820,9 @@ fn tool_get_attribute(args: &Value, state: &mut BrowserState) -> Result<String, 
 }
 
 fn tool_count(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let selector = args.get("selector").and_then(Value::as_str)
+    let selector = args
+        .get("selector")
+        .and_then(Value::as_str)
         .ok_or("Missing selector parameter")?;
     let js = format!(
         "document.querySelectorAll({sel}).length",
@@ -1731,7 +1831,8 @@ fn tool_count(args: &Value, state: &mut BrowserState) -> Result<String, String> 
     let res = state.page_mut().evaluate(&js);
     // V8 numbers come back as f64 even when they are integer-valued; as_u64
     // returns None for f64 in serde_json, so coerce via f64.
-    let n = res.as_u64()
+    let n = res
+        .as_u64()
         .or_else(|| res.as_f64().map(|f| f as u64))
         .unwrap_or(0);
     Ok(n.to_string())
@@ -1742,11 +1843,14 @@ fn tool_count(args: &Value, state: &mut BrowserState) -> Result<String, String> 
 /// of text. Suffix field name with `[]` to return an array (queries all
 /// matching elements rather than the first).
 fn tool_extract(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let schema = args.get("schema").and_then(Value::as_object)
+    let schema = args
+        .get("schema")
+        .and_then(Value::as_object)
         .ok_or("Missing schema object")?
         .clone();
     let schema_json = serde_json::to_string(&schema).unwrap();
-    let js = format!(r#"(function(){{
+    let js = format!(
+        r#"(function(){{
         var schema = {schema};
         var out = {{}};
         for (var key in schema) {{
@@ -1777,7 +1881,9 @@ fn tool_extract(args: &Value, state: &mut BrowserState) -> Result<String, String
             }}
         }}
         return out;
-    }})()"#, schema = schema_json);
+    }})()"#,
+        schema = schema_json
+    );
     let res = state.page_mut().evaluate(&js);
     serde_json::to_string_pretty(&res).map_err(|e| e.to_string())
 }
@@ -1792,8 +1898,12 @@ async fn tool_tab_new(args: &Value, state: &mut BrowserState) -> Result<String, 
             page.http_client.set_user_agent(ua).await;
         }
         page.navigate_with_wait(u, obscura_browser::lifecycle::WaitUntil::DomContentLoaded)
-            .await.map_err(|e| e.to_string())?;
-        Ok(format!("Opened {id} and navigated to {}", page.url_string()))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(format!(
+            "Opened {id} and navigated to {}",
+            page.url_string()
+        ))
     } else {
         Ok(format!("Opened {id} (about:blank)."))
     }
@@ -1803,17 +1913,27 @@ fn tool_tab_list(state: &BrowserState) -> Result<String, String> {
     if state.tabs.is_empty() {
         return Ok("No tabs open.".to_string());
     }
-    let lines: Vec<String> = state.tabs.iter().map(|(id, page)| {
-        let active = if Some(id) == state.active_tab.as_ref() { "*" } else { " " };
-        let url = page.url_string();
-        let title = page.title.replace('\n', " ");
-        format!("{active} {id}  {url}  \"{title}\"")
-    }).collect();
+    let lines: Vec<String> = state
+        .tabs
+        .iter()
+        .map(|(id, page)| {
+            let active = if Some(id) == state.active_tab.as_ref() {
+                "*"
+            } else {
+                " "
+            };
+            let url = page.url_string();
+            let title = page.title.replace('\n', " ");
+            format!("{active} {id}  {url}  \"{title}\"")
+        })
+        .collect();
     Ok(lines.join("\n"))
 }
 
 fn tool_tab_switch(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let tab_id = args.get("tab_id").and_then(Value::as_str)
+    let tab_id = args
+        .get("tab_id")
+        .and_then(Value::as_str)
         .ok_or("Missing tab_id parameter")?;
     if !state.tabs.contains_key(tab_id) {
         return Err(format!("No such tab: {tab_id}"));
@@ -1824,7 +1944,9 @@ fn tool_tab_switch(args: &Value, state: &mut BrowserState) -> Result<String, Str
 }
 
 fn tool_tab_close(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let tab_id = args.get("tab_id").and_then(Value::as_str)
+    let tab_id = args
+        .get("tab_id")
+        .and_then(Value::as_str)
         .map(String::from)
         .or_else(|| state.active_tab.clone())
         .ok_or("No tab to close")?;
@@ -1913,10 +2035,30 @@ fn extract_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeId) -> Str
 
                 let is_block = matches!(
                     tag,
-                    "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-                        | "li" | "tr" | "br" | "hr" | "section" | "article"
-                        | "header" | "footer" | "nav" | "main" | "aside"
-                        | "blockquote" | "pre" | "ul" | "ol" | "table"
+                    "div"
+                        | "p"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                        | "li"
+                        | "tr"
+                        | "br"
+                        | "hr"
+                        | "section"
+                        | "article"
+                        | "header"
+                        | "footer"
+                        | "nav"
+                        | "main"
+                        | "aside"
+                        | "blockquote"
+                        | "pre"
+                        | "ul"
+                        | "ol"
+                        | "table"
                 );
 
                 if is_block {
@@ -1945,21 +2087,41 @@ fn extract_text(dom: &obscura_dom::DomTree, node_id: obscura_dom::NodeId) -> Str
 /// of surrounding context so the agent can locate the section without
 /// pulling the whole page into its window.
 fn tool_search(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let query = args.get("query").and_then(Value::as_str)
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
         .ok_or("Missing query parameter")?;
-    let case_sensitive = args.get("case_sensitive").and_then(Value::as_bool).unwrap_or(false);
+    let case_sensitive = args
+        .get("case_sensitive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
-    let context = args.get("context_chars").and_then(Value::as_u64).unwrap_or(80) as usize;
+    let context = args
+        .get("context_chars")
+        .and_then(Value::as_u64)
+        .unwrap_or(80) as usize;
 
     let page = state.page_mut();
-    let body = page.with_dom(|dom| {
-        dom.query_selector("body").ok().flatten()
-            .map(|b| extract_text(dom, b))
-            .unwrap_or_default()
-    }).unwrap_or_default();
+    let body = page
+        .with_dom(|dom| {
+            dom.query_selector("body")
+                .ok()
+                .flatten()
+                .map(|b| extract_text(dom, b))
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
 
-    let haystack = if case_sensitive { body.clone() } else { body.to_lowercase() };
-    let needle = if case_sensitive { query.to_string() } else { query.to_lowercase() };
+    let haystack = if case_sensitive {
+        body.clone()
+    } else {
+        body.to_lowercase()
+    };
+    let needle = if case_sensitive {
+        query.to_string()
+    } else {
+        query.to_lowercase()
+    };
 
     let mut out = Vec::new();
     let mut idx = 0;
@@ -1970,8 +2132,12 @@ fn tool_search(args: &Value, state: &mut BrowserState) -> Result<String, String>
         // start/end are byte offsets derived from char counts and needle.len(),
         // so they can land inside a multi-byte (CJK) character. Snap to char
         // boundaries before slicing or body[..start] panics (#257).
-        while start > 0 && !body.is_char_boundary(start) { start -= 1; }
-        while end < body.len() && !body.is_char_boundary(end) { end += 1; }
+        while start > 0 && !body.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end < body.len() && !body.is_char_boundary(end) {
+            end += 1;
+        }
         // Trim inward to the nearest whitespace so snippets start/end on words.
         if let Some(i) = body[..start].rfind(|c: char| c.is_whitespace()) {
             start = i + body[i..].chars().next().map_or(1, char::len_utf8);
@@ -1985,111 +2151,22 @@ fn tool_search(args: &Value, state: &mut BrowserState) -> Result<String, String>
             "snippet": snippet,
         }));
         idx = abs + needle.len();
-        if out.len() >= limit { break; }
+        if out.len() >= limit {
+            break;
+        }
     }
     if out.is_empty() {
         Ok(format!("No matches for {query:?}."))
     } else {
-        Ok(format!("{} match(es). {}", out.len(),
-            out.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n")))
+        Ok(format!(
+            "{} match(es). {}",
+            out.len(),
+            out.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
     }
-}
-
-/// Export full session state: cookies + localStorage + sessionStorage
-/// for every origin the page knows about. Agents stash this between
-/// runs to skip a login flow.
-fn tool_storage_state(state: &mut BrowserState) -> Result<String, String> {
-    let cookies: Vec<Value> = state.context.cookie_jar.get_all_cookies().iter().map(|c| json!({
-        "name": c.name,
-        "value": c.value,
-        "domain": c.domain,
-        "path": c.path,
-        "secure": c.secure,
-        "http_only": c.http_only,
-        "same_site": c.same_site,
-        "expires": c.expires,
-    })).collect();
-    // Pull localStorage + sessionStorage for the current page's origin.
-    let storage_js = r#"(function(){
-        var ls = [], ss = [];
-        try { for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); ls.push([k, localStorage.getItem(k)]); } } catch(e) {}
-        try { for (var j = 0; j < sessionStorage.length; j++) { var k2 = sessionStorage.key(j); ss.push([k2, sessionStorage.getItem(k2)]); } } catch(e) {}
-        return { origin: location.origin || '', localStorage: ls, sessionStorage: ss };
-    })()"#;
-    let storage = if state.active_tab.is_some() {
-        state.page_mut().evaluate(storage_js)
-    } else {
-        Value::Null
-    };
-    let origins = if storage.is_object() { vec![storage] } else { vec![] };
-    let out = json!({ "cookies": cookies, "origins": origins });
-    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
-}
-
-fn tool_set_storage_state(args: &Value, state: &mut BrowserState) -> Result<String, String> {
-    let s = args.get("state").ok_or("Missing state object")?;
-    let mut applied = 0u32;
-    // Cookies
-    if let Some(cookies) = s.get("cookies").and_then(Value::as_array) {
-        let parsed: Vec<obscura_net::CookieInfo> = cookies.iter().filter_map(|c| {
-            Some(obscura_net::CookieInfo {
-                name: c.get("name")?.as_str()?.to_string(),
-                value: c.get("value")?.as_str()?.to_string(),
-                domain: c.get("domain")?.as_str()?.to_string(),
-                path: c.get("path").and_then(Value::as_str).unwrap_or("/").to_string(),
-                secure: c.get("secure").and_then(Value::as_bool).unwrap_or(false),
-                http_only: c.get("http_only").and_then(Value::as_bool).unwrap_or(false),
-                same_site: c.get("same_site").and_then(Value::as_str).unwrap_or("").to_string(),
-                expires: c.get("expires").and_then(Value::as_i64),
-            })
-        }).collect();
-        applied += parsed.len() as u32;
-        state.context.cookie_jar.set_cookies_from_cdp(parsed);
-    }
-    // Storage (per origin). Only applies if there's an active page; we
-    // restore on whatever origin is currently loaded, which usually
-    // matches because agents navigate before restoring state.
-    if state.active_tab.is_some() {
-        if let Some(origins) = s.get("origins").and_then(Value::as_array) {
-            for origin_entry in origins {
-                let mut snippets = Vec::new();
-                if let Some(arr) = origin_entry.get("localStorage").and_then(Value::as_array) {
-                    for pair in arr {
-                        if let (Some(k), Some(v)) = (
-                            pair.get(0).and_then(Value::as_str),
-                            pair.get(1).and_then(Value::as_str),
-                        ) {
-                            snippets.push(format!(
-                                "try {{ localStorage.setItem({k},{v}); }} catch(e) {{}};",
-                                k = serde_json::to_string(k).unwrap(),
-                                v = serde_json::to_string(v).unwrap(),
-                            ));
-                            applied += 1;
-                        }
-                    }
-                }
-                if let Some(arr) = origin_entry.get("sessionStorage").and_then(Value::as_array) {
-                    for pair in arr {
-                        if let (Some(k), Some(v)) = (
-                            pair.get(0).and_then(Value::as_str),
-                            pair.get(1).and_then(Value::as_str),
-                        ) {
-                            snippets.push(format!(
-                                "try {{ sessionStorage.setItem({k},{v}); }} catch(e) {{}};",
-                                k = serde_json::to_string(k).unwrap(),
-                                v = serde_json::to_string(v).unwrap(),
-                            ));
-                            applied += 1;
-                        }
-                    }
-                }
-                if !snippets.is_empty() {
-                    let _ = state.page_mut().evaluate(&snippets.join("\n"));
-                }
-            }
-        }
-    }
-    Ok(format!("Restored {applied} state entries."))
 }
 
 #[cfg(test)]
@@ -2097,20 +2174,50 @@ mod tests {
     use super::*;
 
     fn listed_tools() -> Vec<Value> {
-        handle_tools_list(json!(1)).result.expect("tools/list result")
-            .get("tools").and_then(Value::as_array).cloned().expect("tools array")
+        handle_tools_list(json!(1))
+            .result
+            .expect("tools/list result")
+            .get("tools")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("tools array")
     }
 
     #[test]
     fn tool_schemas_expose_snapshot_limit_without_nested_properties() {
         let tools = listed_tools();
-        let snapshot = tools.iter().find(|tool| tool["name"] == "browser_snapshot")
+        let snapshot = tools
+            .iter()
+            .find(|tool| tool["name"] == "browser_snapshot")
             .expect("browser_snapshot tool");
-        assert_eq!(snapshot["inputSchema"]["properties"]["max_chars"]["type"], "number");
+        assert_eq!(
+            snapshot["inputSchema"]["properties"]["max_chars"]["type"],
+            "number"
+        );
         for tool in tools {
             assert!(
-                tool["inputSchema"]["properties"].get("properties").is_none(),
-                "{} has a nested duplicate properties object", tool["name"]
+                tool["inputSchema"]["properties"]
+                    .get("properties")
+                    .is_none(),
+                "{} has a nested duplicate properties object",
+                tool["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn model_tools_do_not_expose_cookie_or_storage_state_access() {
+        let tools = listed_tools();
+        for forbidden in [
+            "browser_get_cookies",
+            "browser_set_cookie",
+            "browser_clear_cookies",
+            "browser_storage_state",
+            "browser_set_storage_state",
+        ] {
+            assert!(
+                tools.iter().all(|tool| tool["name"] != forbidden),
+                "{forbidden} must remain broker-only"
             );
         }
     }
@@ -2119,9 +2226,9 @@ mod tests {
     #[test]
     fn render_tools_are_not_advertised_without_render_feature() {
         let tools = listed_tools();
-        assert!(tools.iter().all(|tool| {
-            tool["name"] != "browser_screenshot" && tool["name"] != "browser_pdf"
-        }));
+        assert!(tools
+            .iter()
+            .all(|tool| { tool["name"] != "browser_screenshot" && tool["name"] != "browser_pdf" }));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2138,12 +2245,16 @@ mod tests {
     fn render_tools_are_advertised_with_flat_schemas() {
         let tools = listed_tools();
         for name in ["browser_screenshot", "browser_pdf"] {
-            let tool = tools.iter().find(|tool| tool["name"] == name)
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
                 .unwrap_or_else(|| panic!("missing {name}"));
             assert_eq!(tool["inputSchema"]["type"], "object");
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
             assert!(tool["inputSchema"]["properties"].is_object());
-            assert!(tool["inputSchema"]["properties"].get("properties").is_none());
+            assert!(tool["inputSchema"]["properties"]
+                .get("properties")
+                .is_none());
         }
     }
 
@@ -2157,12 +2268,18 @@ mod tests {
         state.page_mut().set_viewport((64.0, 48.0));
 
         let screenshot = handle_tool_call(
-            json!(1), &json!({ "name": "browser_screenshot", "arguments": {} }), &mut state,
-        ).await.result.expect("screenshot response");
+            json!(1),
+            &json!({ "name": "browser_screenshot", "arguments": {} }),
+            &mut state,
+        )
+        .await
+        .result
+        .expect("screenshot response");
         let image = &screenshot["content"][0];
         assert_eq!(image["type"], "image");
         assert_eq!(image["mimeType"], "image/png");
-        let png = BASE64.decode(image["data"].as_str().expect("PNG base64"))
+        let png = BASE64
+            .decode(image["data"].as_str().expect("PNG base64"))
             .expect("valid PNG base64");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
@@ -2170,11 +2287,15 @@ mod tests {
             json!(2),
             &json!({ "name": "browser_pdf", "arguments": { "print_background": true } }),
             &mut state,
-        ).await.result.expect("PDF response");
+        )
+        .await
+        .result
+        .expect("PDF response");
         let resource = &pdf["content"][0];
         assert_eq!(resource["type"], "resource");
         assert_eq!(resource["resource"]["mimeType"], "application/pdf");
-        let bytes = BASE64.decode(resource["resource"]["blob"].as_str().expect("PDF base64"))
+        let bytes = BASE64
+            .decode(resource["resource"]["blob"].as_str().expect("PDF base64"))
             .expect("valid PDF base64");
         assert!(bytes.starts_with(b"%PDF-"));
 
@@ -2182,14 +2303,20 @@ mod tests {
             json!(3),
             &json!({ "name": "browser_screenshot", "arguments": { "width": 0 } }),
             &mut state,
-        ).await.result.expect("invalid screenshot response");
+        )
+        .await
+        .result
+        .expect("invalid screenshot response");
         assert_eq!(invalid_screenshot["isError"], true);
 
         let invalid_pdf = handle_tool_call(
             json!(4),
             &json!({ "name": "browser_pdf", "arguments": { "scale": 3 } }),
             &mut state,
-        ).await.result.expect("invalid PDF response");
+        )
+        .await
+        .result
+        .expect("invalid PDF response");
         assert_eq!(invalid_pdf["isError"], true);
     }
 
@@ -2283,12 +2410,10 @@ mod tests {
             .navigate(&base)
             .await
             .expect("form page should navigate");
-        assert!(
-            requests
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .expect("the form page itself must be fetched")
-                .starts_with("GET /"),
-        );
+        assert!(requests
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the form page itself must be fetched")
+            .starts_with("GET /"),);
 
         tool_fill(&json!({ "selector": "#q", "value": "hello" }), &mut state)
             .await
@@ -2418,7 +2543,9 @@ mod tests {
         );
         assert_eq!(
             actual,
-            json!(r#"{"domValue":"form-filled","controlledState":"form-filled","controlledUpdates":3,"lastInputTarget":"field","lastInputTrusted":true}"#),
+            json!(
+                r#"{"domValue":"form-filled","controlledState":"form-filled","controlledUpdates":3,"lastInputTarget":"field","lastInputTrusted":true}"#
+            ),
         );
     }
 
@@ -2490,7 +2617,9 @@ mod tests {
         );
         assert_eq!(
             actual,
-            json!(r#"{"domChecked":true,"checkedCommitted":true,"checkTrusted":true,"selValue":"b","selectTrusted":true}"#),
+            json!(
+                r#"{"domChecked":true,"checkedCommitted":true,"checkTrusted":true,"selValue":"b","selectTrusted":true}"#
+            ),
         );
     }
 }
