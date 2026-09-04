@@ -14523,6 +14523,96 @@ mod tests {
 
     #[cfg(feature = "render")]
     #[tokio::test(flavor = "current_thread")]
+    async fn image_lifecycle_uses_fetch_interception_for_binary_resources() {
+        let mut rt = ObscuraJsRuntime::new();
+        rt.set_dom(parse_html(
+            r#"<img id="logo-one" src="https://taffy-generated-qa.invalid/assets/logo.svg">
+                <img id="logo-two" src="https://taffy-generated-qa.invalid/assets/logo.svg">
+                <img id="hero" src="https://taffy-generated-qa.invalid/assets/hero.png">"#,
+        ));
+        rt.set_url("https://taffy-generated-qa.invalid/index.html");
+        let (intercept_tx, mut intercept_rx) = tokio::sync::mpsc::unbounded_channel();
+        rt.set_intercept_tx(intercept_tx);
+        rt.set_intercept_enabled(true);
+        rt.run_page_init();
+
+        let png = two_by_three_png();
+        let interceptor = tokio::spawn(async move {
+            let mut urls = Vec::new();
+            for _ in 0..2 {
+                let request = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    intercept_rx.recv(),
+                )
+                .await
+                .expect("image request was not intercepted")
+                .expect("interception channel closed");
+                assert_eq!(request.method, "GET");
+                assert_eq!(request.resource_type, "Image");
+                let (content_type, body) = if request.url.ends_with("/logo.svg") {
+                    (
+                        "image/svg+xml",
+                        br#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="7"></svg>"#
+                            .to_vec(),
+                    )
+                } else {
+                    assert!(request.url.ends_with("/hero.png"));
+                    ("image/png", png.clone())
+                };
+                urls.push(request.url);
+                request
+                    .resolver
+                    .send(crate::ops::InterceptResolution::FulfillBytes {
+                        status: 200,
+                        headers: std::collections::HashMap::from([(
+                            "Content-Type".to_string(),
+                            content_type.to_string(),
+                        )]),
+                        body,
+                    })
+                    .expect("image fulfillment receiver");
+            }
+            urls.sort();
+            assert_eq!(
+                urls,
+                vec![
+                    "https://taffy-generated-qa.invalid/assets/hero.png",
+                    "https://taffy-generated-qa.invalid/assets/logo.svg",
+                ]
+            );
+        });
+
+        let result = rt
+            .evaluate_for_cdp(
+                r#"
+                (async () => {
+                    const images = Array.from(document.images);
+                    try {
+                        await Promise.all(images.map(image => image.decode()));
+                        return images.map(image => [
+                            image.complete,
+                            image.naturalWidth,
+                            image.naturalHeight,
+                        ]);
+                    } catch (error) {
+                        return ["error"];
+                    }
+                })()
+                "#,
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        interceptor.await.unwrap();
+        assert_eq!(
+            result.value.unwrap(),
+            serde_json::json!([[true, 12, 7], [true, 12, 7], [true, 2, 3]])
+        );
+    }
+
+    #[cfg(feature = "render")]
+    #[tokio::test(flavor = "current_thread")]
     async fn parser_images_load_concurrently_without_blocking_the_event_loop() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();

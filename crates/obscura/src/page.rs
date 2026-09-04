@@ -123,10 +123,10 @@ impl Page {
         self.inner.get_mut().add_preload_script(script);
     }
 
-    /// Enable CDP-Fetch-style interception of every JS `fetch()`/XHR. Returns a
-    /// receiver yielding each request; resolve it through its `resolver` with
-    /// [`obscura::InterceptResolution`] (`Continue`, `Fulfill`, `Fail`) to pass,
-    /// mock, or block it. Works in stealth and non-stealth.
+    /// Enable CDP-Fetch-style interception of `fetch()`/XHR and image loads.
+    /// Returns a receiver yielding each supported request; resolve it through
+    /// its `resolver` with [`obscura::InterceptResolution`] to pass, mock, or
+    /// block it. Works in stealth and non-stealth.
     pub fn enable_interception(
         &mut self,
     ) -> tokio::sync::mpsc::UnboundedReceiver<InterceptedRequest> {

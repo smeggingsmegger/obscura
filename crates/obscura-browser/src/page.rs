@@ -4627,11 +4627,10 @@ impl Page {
         self.preload_scripts.push(script.to_string());
     }
 
-    /// Enable CDP-Fetch-style interception of JS-initiated `fetch()`/XHR.
-    /// Returns a receiver yielding every such request; resolve each through its
-    /// `resolver` with `InterceptResolution::{Continue, Fulfill, Fail}` to pass,
-    /// mock, or block it. Works in stealth and non-stealth. Mirrors how the CDP
-    /// server wires the channel (`obscura-cdp/src/server.rs`).
+    /// Enable CDP-Fetch-style interception of `fetch()`/XHR and image loads.
+    /// Returns a receiver yielding every supported request; resolve each through
+    /// its `resolver` to pass, mock, or block it. Works in stealth and
+    /// non-stealth. Mirrors how the CDP server wires the channel.
     pub fn enable_interception(
         &mut self,
     ) -> tokio::sync::mpsc::UnboundedReceiver<obscura_js::ops::InterceptedRequest> {

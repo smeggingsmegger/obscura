@@ -56,6 +56,11 @@ pub enum InterceptResolution {
         /// of any non-UTF-8 payload (image, font, protobuf). See #912.
         body_base64: String,
     },
+    FulfillBytes {
+        status: u16,
+        headers: HashMap<String, String>,
+        body: Vec<u8>,
+    },
     Fail {
         reason: String,
     },
@@ -3300,6 +3305,19 @@ async fn op_fetch_url(
                         credentials,
                         internal_load,
                     )
+                    .to_string());
+                }
+                Ok(InterceptResolution::FulfillBytes {
+                    status,
+                    headers: h,
+                    body,
+                }) => {
+                    return Ok(serde_json::json!({
+                        "status": status,
+                        "bodyBase64": BASE64.encode(body),
+                        "url": url,
+                        "headers": h,
+                    })
                     .to_string());
                 }
                 Ok(InterceptResolution::Fail { reason }) => {
@@ -7109,6 +7127,7 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
         http_client,
         callbacks,
         page_in_flight,
+        intercept_tx,
         blocked,
     ) = {
         let gs = shared.borrow();
@@ -7156,6 +7175,11 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
             gs.http_client.clone(),
             gs.callbacks.clone(),
             Arc::clone(&gs.page_in_flight),
+            if gs.intercept_enabled {
+                gs.intercept_tx.clone()
+            } else {
+                None
+            },
             blocked,
         )
     };
@@ -7166,7 +7190,7 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
     let has_page_transport = http_client.is_some() || stealth_client.is_some();
     #[cfg(not(feature = "stealth"))]
     let has_page_transport = http_client.is_some();
-    if !has_page_transport {
+    if !has_page_transport && intercept_tx.is_none() {
         return load_image_metadata_without_page_transport(&mut shared.borrow_mut(), node_id);
     }
 
@@ -7204,11 +7228,89 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
     page_in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let _page_in_flight = PageImageInFlightGuard(page_in_flight);
 
-    let parsed_url = url::Url::parse(&selected_url).ok();
-    let response = if blocked || parsed_url.is_none() {
+    let allow_private_network = http_client
+        .as_ref()
+        .is_some_and(|client| client.allow_private_network)
+        || obscura_net::env_allows_private_network();
+    let original_url = url::Url::parse(&selected_url).ok();
+    let forbidden = original_url
+        .as_ref()
+        .is_some_and(|url| validate_fetch_url(url, allow_private_network).is_err());
+    let mut network_url = selected_url.clone();
+    let mut intercepted_bytes = None;
+    if !blocked && original_url.is_some() && !forbidden {
+        if let Some(tx) = intercept_tx {
+            let request_id = {
+                let mut gs = shared.borrow_mut();
+                gs.intercept_counter += 1;
+                format!("intercept-{}", gs.intercept_counter)
+            };
+            let (resolve_tx, resolve_rx) = tokio::sync::oneshot::channel();
+            let intercepted = InterceptedRequest {
+                request_id,
+                url: selected_url.clone(),
+                method: "GET".to_string(),
+                headers: HashMap::new(),
+                resource_type: "Image".to_string(),
+                resolver: resolve_tx,
+            };
+            if tx.send(intercepted).is_ok() {
+                match resolve_rx.await {
+                    Ok(InterceptResolution::Fulfill {
+                        status,
+                        body,
+                        ..
+                    }) => {
+                        intercepted_bytes = Some(
+                            (200..300)
+                                .contains(&status)
+                                .then(|| body.into_bytes()),
+                        );
+                    }
+                    Ok(InterceptResolution::FulfillBytes { status, body, .. }) => {
+                        intercepted_bytes =
+                            Some((200..300).contains(&status).then_some(body));
+                    }
+                    Ok(InterceptResolution::Fail { .. }) => {
+                        intercepted_bytes = Some(None);
+                    }
+                    Ok(InterceptResolution::Continue {
+                        url,
+                        method,
+                        body,
+                        ..
+                    }) => {
+                        let invalid_method = method
+                            .as_deref()
+                            .is_some_and(|method| !method.eq_ignore_ascii_case("GET"));
+                        if invalid_method || body.is_some() {
+                            intercepted_bytes = Some(None);
+                        } else if let Some(url) = url {
+                            let parsed = url::Url::parse(&url).ok();
+                            let forbidden = parsed.as_ref().is_some_and(|url| {
+                                validate_fetch_url(url, allow_private_network).is_err()
+                            });
+                            if parsed.is_none() || forbidden {
+                                intercepted_bytes = Some(None);
+                            } else {
+                                network_url = url;
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+    }
+
+    let parsed_network_url = url::Url::parse(&network_url).ok();
+    let response = if intercepted_bytes.is_some()
+        || blocked
+        || original_url.is_none()
+        || forbidden
+    {
         None
-    } else {
-        let parsed_url = parsed_url.as_ref().unwrap();
+    } else if let Some(parsed_url) = parsed_network_url.as_ref() {
         #[cfg(feature = "stealth")]
         {
             if let Some(client) = stealth_client {
@@ -7220,10 +7322,8 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
                     )
                     .await
                     .ok()
-            } else {
-                http_client
-                    .as_ref()
-                    .unwrap()
+            } else if let Some(client) = http_client.as_ref() {
+                client
                     .fetch_resource_with_callbacks(
                         parsed_url,
                         resource_request,
@@ -7231,22 +7331,34 @@ async fn op_load_image_metadata(state: Rc<RefCell<OpState>>, nid: u32) -> String
                     )
                     .await
                     .ok()
+            } else {
+                None
             }
         }
         #[cfg(not(feature = "stealth"))]
         {
-            http_client
-                .as_ref()
-                .unwrap()
-                .fetch_resource_with_callbacks(parsed_url, resource_request, callbacks.as_deref())
-                .await
-                .ok()
+            if let Some(client) = http_client.as_ref() {
+                client
+                    .fetch_resource_with_callbacks(
+                        parsed_url,
+                        resource_request,
+                        callbacks.as_deref(),
+                    )
+                    .await
+                    .ok()
+            } else {
+                None
+            }
         }
+    } else {
+        None
     };
-    let bytes = response.and_then(|response| {
-        (200..300)
-            .contains(&response.status)
-            .then_some(response.body)
+    let bytes = intercepted_bytes.unwrap_or_else(|| {
+        response.and_then(|response| {
+            (200..300)
+                .contains(&response.status)
+                .then_some(response.body)
+        })
     });
     let waiters = {
         let mut gs = shared.borrow_mut();

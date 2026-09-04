@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -1523,18 +1524,22 @@ fn handle_fetch_resolution(
                 "Fetch.fulfillRequest" => {
                     let status = req.params.get("responseCode").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
                     let raw_body = req.params.get("body").and_then(|v| v.as_str()).unwrap_or("");
-                    // `body` is a lossy text view; `body_base64` carries the CDP
-                    // body (already base64) through unchanged so op_fetch_url can
-                    // hand JS the exact bytes for a binary fulfill (#912).
-                    let body = decode_base64(raw_body);
-                    let body_base64 = raw_body.to_string();
                     let headers = req.params.get("responseHeaders")
                         .and_then(|v| v.as_array())
                         .map(|arr| arr.iter().filter_map(|h| {
                             Some((h.get("name")?.as_str()?.to_string(), h.get("value")?.as_str()?.to_string()))
                         }).collect())
                         .unwrap_or_default();
-                    obscura_js::ops::InterceptResolution::Fulfill { status, headers, body, body_base64 }
+                    match decode_base64(raw_body) {
+                        Ok(body) => obscura_js::ops::InterceptResolution::FulfillBytes {
+                            status,
+                            headers,
+                            body,
+                        },
+                        Err(_) => obscura_js::ops::InterceptResolution::Fail {
+                            reason: "Invalid base64 fulfillment body".to_string(),
+                        },
+                    }
                 }
                 "Fetch.failRequest" => {
                     let reason = req.params.get("errorReason").and_then(|v| v.as_str()).unwrap_or("Failed").to_string();
@@ -1861,31 +1866,8 @@ async fn process_cdp_message(
     }
 }
 
-pub(crate) fn decode_base64(input: &str) -> String {
-    fn val(c: u8) -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let bytes: Vec<u8> = input.bytes().filter_map(val).collect();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    for chunk in bytes.chunks(4) {
-        let b = [
-            chunk.first().copied().unwrap_or(0),
-            chunk.get(1).copied().unwrap_or(0),
-            chunk.get(2).copied().unwrap_or(0),
-            chunk.get(3).copied().unwrap_or(0),
-        ];
-        out.push((b[0] << 2) | (b[1] >> 4));
-        if chunk.len() > 2 { out.push((b[1] << 4) | (b[2] >> 2)); }
-        if chunk.len() > 3 { out.push((b[2] << 6) | b[3]); }
-    }
-    String::from_utf8_lossy(&out).to_string()
+pub(crate) fn decode_base64(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    BASE64.decode(input)
 }
 
 fn fast_path_response(text: &str) -> Option<String> {
@@ -2017,8 +1999,9 @@ async fn handle_connection_ws(
 mod tests {
     use super::{
         bearer_authorized, control_refusal, handle_fetch_resolution, is_navigate_method,
-        merge_cookie_delta, parse_cdp_headers, websocket_authority, ControlRefusal,
+        merge_cookie_delta, parse_cdp_headers, websocket_authority, ControlRefusal, BASE64,
     };
+    use base64::Engine as _;
     #[cfg(feature = "render")]
     use super::{pump_and_forward_screencast_frames, pump_live_page_event_loop};
     use obscura_net::{CookieInfo, CookieJar};
@@ -2481,6 +2464,48 @@ mod tests {
             serde_json::from_str(&reply_rx.try_recv().expect("one command response")).unwrap();
         assert_eq!(response["id"], 17);
         assert!(reply_rx.try_recv().is_err(), "must not emit a duplicate response");
+    }
+
+    #[test]
+    fn fetch_fulfillment_preserves_binary_response_body() {
+        let expected = vec![0, 159, 146, 150, 255, 10, 0, 128];
+        let (resolution_tx, mut resolution_rx) = tokio::sync::oneshot::channel();
+        let mut paused = HashMap::from([("image-request".to_string(), resolution_tx)]);
+        let (reply_tx, _reply_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut ctx = crate::dispatch::CdpContext::new();
+        let command = json!({
+            "id": 18,
+            "method": "Fetch.fulfillRequest",
+            "params": {
+                "requestId": "image-request",
+                "responseCode": 200,
+                "responseHeaders": [{"name": "Content-Type", "value": "image/png"}],
+                "body": BASE64.encode(&expected),
+            },
+        })
+        .to_string();
+
+        assert!(handle_fetch_resolution(
+            &command,
+            &mut ctx,
+            &reply_tx,
+            &mut paused,
+        ));
+        match resolution_rx.try_recv().expect("fulfillment resolution") {
+            obscura_js::ops::InterceptResolution::FulfillBytes {
+                status,
+                headers,
+                body,
+            } => {
+                assert_eq!(status, 200);
+                assert_eq!(
+                    headers.get("Content-Type").map(String::as_str),
+                    Some("image/png")
+                );
+                assert_eq!(body, expected);
+            }
+            other => panic!("expected binary fulfillment, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "render")]

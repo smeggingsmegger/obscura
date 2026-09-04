@@ -160,8 +160,11 @@ pub async fn handle(
             // The CDP fulfillRequest body is base64-encoded; decode it — parity
             // with server.rs handle_fetch_resolution (#919). (Binary-safe body
             // transport across the JS boundary remains tracked in #912.)
-            let body =
-                crate::server::decode_base64(params.get("body").and_then(|v| v.as_str()).unwrap_or(""));
+            let body = crate::server::decode_base64(
+                params.get("body").and_then(|v| v.as_str()).unwrap_or(""),
+            )
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
 
             if let Some(paused) = ctx.fetch_intercept.paused.remove(request_id) {
                 let _ = paused.resolver.send(FetchResolution::Fulfill {
