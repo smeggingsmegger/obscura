@@ -5360,7 +5360,7 @@ fn origin_storage_command(
 #[op2]
 #[string]
 fn op_local_storage(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope,
     state: &OpState,
     #[string] command: &str,
     #[string] key: &str,
@@ -5377,7 +5377,7 @@ fn op_local_storage(
 #[op2]
 #[string]
 fn op_session_storage(
-    scope: &mut v8::HandleScope,
+    scope: &mut v8::PinScope,
     state: &OpState,
     #[string] command: &str,
     #[string] key: &str,
