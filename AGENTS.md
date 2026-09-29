@@ -135,6 +135,26 @@ handover notes are private working material: do not edit them, link them from
 public documentation, stage them, or commit them. Do not commit generated
 screenshots or reports.
 
+## Environment manifest
+
+`../taffy-tree-web/config/environment-manifest.yaml` lists every runtime
+environment variable: each key a deployed Fleet component or Taffy Local
+reads. Fleet's configuration editor is built from it, so an unlisted key
+shows up there with no explanation. When you add, remove or rename a
+runtime environment read in this repo, or change its meaning or default:
+
+1. Describe the key in `../taffy-tree-web/config/environment-curation.json`
+   (description, requirement, feature, secret, value type, default, options),
+   working from the code that reads it. A key read only by tests, build
+   scripts or dev tooling goes in `excluded_keys` with a reason instead.
+2. In `taffy-tree-web`, run `python3 scripts/environment_catalog.py --write`,
+   then `--check`.
+3. In `taffy-fleet`, run `python3 scripts/sync-configuration-contracts.py`.
+
+`--check` fails while any runtime key is uncurated. The curation and manifest
+belong to `taffy-tree-web`; the snapshot belongs to `taffy-fleet`. Commit each
+in its own repo.
+
 ## Gotchas
 
 - **DOM mutation arg order:** `insertBefore` / `replaceChild` in `bootstrap.js`
